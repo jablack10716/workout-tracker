@@ -93,13 +93,12 @@ CREATE TABLE session_exercises (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     session_id UUID REFERENCES sessions(id) ON DELETE CASCADE,
     routine_exercise_id UUID REFERENCES routine_exercises(id) ON DELETE CASCADE,
+    exercise_id UUID REFERENCES exercises(id) ON DELETE CASCADE,
     
     -- Captured after completing the exercise in this session, 
     -- to be used as the recommendation in cycle X+1.
     next_target_weight DECIMAL(6,2),
-    next_target_reps INTEGER,
-    
-    UNIQUE (session_id, routine_exercise_id)
+    next_target_reps INTEGER
 );
 
 -- 4.2 Logged Sets (Set-by-Set Data)
