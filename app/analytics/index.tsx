@@ -172,7 +172,7 @@ export default function AnalyticsScreen() {
             <Text className="text-white font-bold text-base">Auto-Regulation Intelligence</Text>
           </View>
           <Text className="text-purple-200 text-xs leading-5">
-            Based on your progressive overload formula ($$W_{\text{target}} = W_{\text{base}} \times \text{Volume Delta}$$), target weight increases 2.5–5% every 2 clean completed cycles.
+            Based on your progressive overload formula (Target Weight = Base Weight × Volume Delta), target weight increases 2.5–5% every 2 clean completed cycles.
           </Text>
         </View>
 
