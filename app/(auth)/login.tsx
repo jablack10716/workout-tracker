@@ -54,7 +54,9 @@ export default function LoginScreen() {
   return (
     <View className="flex-1 justify-center p-6 bg-slate-900">
       <View className="items-center mb-10">
-        <Text className="text-4xl font-bold text-white mb-2">WeightLog</Text>
+        <Text className="text-3xl font-extrabold text-white text-center mb-2">
+          Best Damn Weight Lifting Tracker Ever
+        </Text>
         <Text className="text-slate-400 text-center">Track your progress, perfectly.</Text>
       </View>
 
