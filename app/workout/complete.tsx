@@ -2,13 +2,14 @@ import { useState, useEffect } from 'react';
 import { View, Text, TouchableOpacity, ScrollView, ActivityIndicator, Alert } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { supabase } from '../../src/lib/supabase';
-import { Trophy, Flame, Dumbbell, Clock, ArrowRight, CheckCircle } from 'lucide-react-native';
+import { Trophy, Flame, Dumbbell, Clock, ArrowRight, CheckCircle, AlertCircle, RefreshCw } from 'lucide-react-native';
 
 export default function WorkoutCompleteScreen() {
   const router = useRouter();
   const params = useLocalSearchParams();
 
   const routineId = params.routine_id as string;
+  const routineDayId = (params.routine_day_id as string) || null;
   const currentDay = parseInt(params.current_day as string, 10) || 1;
   const currentCycle = parseInt(params.current_cycle as string, 10) || 1;
   const daysInSplit = parseInt(params.days_in_split as string, 10) || 3;
@@ -17,6 +18,7 @@ export default function WorkoutCompleteScreen() {
 
   const [saving, setSaving] = useState(true);
   const [saved, setSaved] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const [stats, setStats] = useState({
     totalVolume: 0,
     totalSets: 0,
@@ -30,11 +32,14 @@ export default function WorkoutCompleteScreen() {
   const saveWorkoutSession = async () => {
     try {
       setSaving(true);
+      setSaveError(null);
+
       const { data: { session: authSession } } = await supabase.auth.getSession();
       const userId = authSession?.user?.id;
 
       if (!userId) {
         setSaving(false);
+        setSaveError('User authentication session expired. Please log in again.');
         return;
       }
 
@@ -45,7 +50,7 @@ export default function WorkoutCompleteScreen() {
       let exerciseCount = workoutPayload.length;
 
       workoutPayload.forEach((ex: any) => {
-        ex.sets.forEach((s: any) => {
+        ex.sets?.forEach((s: any) => {
           if (s.is_completed) {
             completedSetsSum++;
             const w = parseFloat(s.weight) || 0;
@@ -61,21 +66,28 @@ export default function WorkoutCompleteScreen() {
         totalExercises: exerciseCount
       });
 
-      // 1. Insert Session
+      // 1. Insert Session (including status = 'completed', duration_seconds, and routine_day_id)
+      const sessionPayload: any = {
+        user_id: userId,
+        routine_id: routineId,
+        cycle_number: currentCycle,
+        status: 'completed',
+        started_at: new Date(Date.now() - durationSeconds * 1000).toISOString(),
+        completed_at: new Date().toISOString(),
+        duration_seconds: durationSeconds
+      };
+
+      if (routineDayId) {
+        sessionPayload.routine_day_id = routineDayId;
+      }
+
       const { data: sessionData, error: sessionErr } = await supabase
         .from('sessions')
-        .insert([{
-          user_id: userId,
-          routine_id: routineId,
-          started_at: new Date(Date.now() - durationSeconds * 1000).toISOString(),
-          completed_at: new Date().toISOString(),
-          cycle_number: currentCycle,
-          duration_seconds: durationSeconds
-        }])
+        .insert([sessionPayload])
         .select()
         .single();
 
-      if (sessionErr || !sessionData) throw sessionErr;
+      if (sessionErr || !sessionData) throw sessionErr || new Error('Failed to create session');
 
       const sessionId = sessionData.id;
 
@@ -95,7 +107,7 @@ export default function WorkoutCompleteScreen() {
 
         const seId = seData.id;
 
-        const setRows = ex.sets.map((s: any) => ({
+        const setRows = (ex.sets || []).map((s: any) => ({
           session_exercise_id: seId,
           set_number: s.set_number,
           weight: parseFloat(s.weight) || 0,
@@ -103,7 +115,10 @@ export default function WorkoutCompleteScreen() {
           is_completed: s.is_completed
         }));
 
-        await supabase.from('session_sets').insert(setRows);
+        if (setRows.length > 0) {
+          const { error: setsErr } = await supabase.from('session_sets').insert(setRows);
+          if (setsErr) console.warn('Error inserting session sets:', setsErr);
+        }
       }
 
       // 3. Cycle Rotation Engine — Advance split day
@@ -129,7 +144,8 @@ export default function WorkoutCompleteScreen() {
     } catch (err: any) {
       console.error('Error saving workout session:', err);
       setSaving(false);
-      setSaved(true);
+      setSaved(false);
+      setSaveError(err.message || 'An unexpected error occurred while saving your workout.');
     }
   };
 
@@ -149,6 +165,27 @@ export default function WorkoutCompleteScreen() {
           <Text className="text-white text-3xl font-bold mb-1">Workout Complete!</Text>
           <Text className="text-slate-400 text-sm font-medium">Great effort on the gym floor today.</Text>
         </View>
+
+        {/* Error Notification if save failed */}
+        {saveError && (
+          <View className="bg-red-950/60 p-4 rounded-2xl border border-red-500/50 mb-6 flex-row items-center justify-between">
+            <View className="flex-row items-center flex-1 mr-3">
+              <AlertCircle color="#ef4444" size={24} className="mr-3" />
+              <View className="flex-1">
+                <Text className="text-red-200 font-bold text-base">Save Failed</Text>
+                <Text className="text-red-300 text-xs mt-0.5" numberOfLines={2}>{saveError}</Text>
+              </View>
+            </View>
+            <TouchableOpacity
+              onPress={saveWorkoutSession}
+              disabled={saving}
+              className="bg-red-600 px-3 py-2 rounded-xl flex-row items-center"
+            >
+              <RefreshCw color="white" size={14} className="mr-1" />
+              <Text className="text-white text-xs font-bold">Retry</Text>
+            </TouchableOpacity>
+          </View>
+        )}
 
         {/* Stats Grid */}
         <View className="flex-row gap-3 mb-6">
@@ -172,17 +209,19 @@ export default function WorkoutCompleteScreen() {
         </View>
 
         {/* Cycle Progression Banner */}
-        <View className="bg-indigo-950/40 p-5 rounded-2xl border border-indigo-500/30 mb-8 flex-row items-center justify-between">
-          <View className="flex-row items-center flex-1 mr-2">
-            <CheckCircle color="#34d399" size={24} className="mr-3" />
-            <View>
-              <Text className="text-white font-bold text-base">Cycle Advanced</Text>
-              <Text className="text-indigo-200 text-xs mt-0.5">
-                Next workout: Day {currentDay >= daysInSplit ? 1 : currentDay + 1} of {daysInSplit}
-              </Text>
+        {saved && (
+          <View className="bg-indigo-950/40 p-5 rounded-2xl border border-indigo-500/30 mb-8 flex-row items-center justify-between">
+            <View className="flex-row items-center flex-1 mr-2">
+              <CheckCircle color="#34d399" size={24} className="mr-3" />
+              <View>
+                <Text className="text-white font-bold text-base">Cycle Advanced</Text>
+                <Text className="text-indigo-200 text-xs mt-0.5">
+                  Next workout: Day {currentDay >= daysInSplit ? 1 : currentDay + 1} of {daysInSplit}
+                </Text>
+              </View>
             </View>
           </View>
-        </View>
+        )}
       </ScrollView>
 
       {/* Return to Dashboard CTA */}
@@ -190,13 +229,15 @@ export default function WorkoutCompleteScreen() {
         <TouchableOpacity
           onPress={() => router.replace('/(tabs)/')}
           disabled={saving}
-          className="bg-blue-600 p-4 rounded-2xl flex-row items-center justify-center"
+          className={`${saved ? 'bg-blue-600' : saveError ? 'bg-slate-800' : 'bg-blue-600'} p-4 rounded-2xl flex-row items-center justify-center`}
         >
           {saving ? (
             <ActivityIndicator color="white" />
           ) : (
             <>
-              <Text className="text-white font-bold text-lg mr-2">Return to Dashboard</Text>
+              <Text className="text-white font-bold text-lg mr-2">
+                {saved ? 'Return to Dashboard' : saveError ? 'Return Anyway' : 'Return to Dashboard'}
+              </Text>
               <ArrowRight color="white" size={20} />
             </>
           )}

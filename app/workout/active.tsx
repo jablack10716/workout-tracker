@@ -29,6 +29,7 @@ export default function ActiveWorkoutScreen() {
   const [loading, setLoading] = useState(true);
   const [activeRoutine, setActiveRoutine] = useState<any>(null);
   const [activeDayName, setActiveDayName] = useState('Workout');
+  const [activeDayId, setActiveDayId] = useState<string | null>(null);
   const [workoutExercises, setWorkoutExercises] = useState<WorkoutExerciseItem[]>([]);
   const [startTime] = useState<number>(Date.now());
 
@@ -91,6 +92,7 @@ export default function ActiveWorkoutScreen() {
 
     if (routineDay) {
       setActiveDayName(routineDay.name || `Day ${currentDayNum}`);
+      setActiveDayId(routineDay.id || null);
 
       const rawExercises = routineDay.routine_exercises || [];
       // Sort by order_index
@@ -232,6 +234,7 @@ export default function ActiveWorkoutScreen() {
       pathname: '/workout/complete',
       params: {
         routine_id: activeRoutine.id,
+        routine_day_id: activeDayId || '',
         current_day: activeRoutine.current_day,
         current_cycle: activeRoutine.current_cycle,
         days_in_split: activeRoutine.days_in_split,

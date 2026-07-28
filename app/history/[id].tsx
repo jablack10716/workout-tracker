@@ -66,7 +66,11 @@ export default function SessionDetailScreen() {
     });
   });
 
-  const mins = Math.max(Math.round((session.duration_seconds || 1800) / 60), 1);
+  const calculatedSecs = session.completed_at && session.started_at
+    ? Math.max(Math.round((new Date(session.completed_at).getTime() - new Date(session.started_at).getTime()) / 1000), 0)
+    : 1800;
+  const durationSecs = session.duration_seconds || calculatedSecs;
+  const mins = Math.max(Math.round(durationSecs / 60), 1);
 
   return (
     <View className="flex-1 bg-slate-950 p-4 pt-12">

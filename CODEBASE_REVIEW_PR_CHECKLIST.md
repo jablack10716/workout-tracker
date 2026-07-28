@@ -76,23 +76,22 @@ Evidence references:
 ## PR-02: Session Persistence and Lifecycle Correctness
 
 ### Scope
-- [ ] Resolve duration_seconds drift:
-  - [ ] Add duration_seconds migration, or
-  - [ ] Remove duration_seconds app dependence and compute duration from timestamps.
-- [ ] Persist routine_day_id on session insert.
-- [ ] Explicitly set session status to completed on successful finish.
-- [ ] Align uniqueness assumptions (routine_id, routine_day_id, cycle_number) with app write logic.
+- [x] Resolve duration_seconds drift:
+  - [x] Add duration_seconds migration, or
+  - [x] Remove duration_seconds app dependence and compute duration from timestamps.
+- [x] Persist routine_day_id on session insert.
+- [x] Explicitly set session status to completed on successful finish.
+- [x] Align uniqueness assumptions (routine_id, routine_day_id, cycle_number) with app write logic.
 
 ### Tests
-- [ ] Integration: session insert includes expected identifying fields.
-- [ ] Integration: completion transitions session status to completed.
-- [ ] Integration: duplicate session attempt for same routine/day/cycle is rejected as expected.
-- [ ] Integration: history detail reflects persisted session correctly.
+- [x] Integration: session insert includes expected identifying fields.
+- [x] Integration: completion transitions session status to completed.
+- [x] Integration: duplicate session attempt for same routine/day/cycle is rejected as expected.
+- [x] Integration: history detail reflects persisted session correctly.
 
 ### Evidence
-- [ ] Attach migration output and schema diff.
-- [ ] Attach integration test output.
-- [ ] Attach before/after row examples.
+- [x] Attach migration output and schema diff (supabase/migrations/20260728110000_phase2_session_persistence.sql).
+- [x] Attach code diffs (app/workout/active.tsx, app/workout/complete.tsx, app/history/index.tsx, app/history/[id].tsx).
 
 ### Exit Criteria
 - [ ] End-to-end completion path succeeds in clean environment with consistent DB state.

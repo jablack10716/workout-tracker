@@ -65,7 +65,11 @@ export default function HistoryScreen() {
       });
     });
 
-    const mins = Math.max(Math.round((item.duration_seconds || 1800) / 60), 1);
+    const calculatedSecs = item.completed_at && item.started_at
+      ? Math.max(Math.round((new Date(item.completed_at).getTime() - new Date(item.started_at).getTime()) / 1000), 0)
+      : 1800;
+    const durationSecs = item.duration_seconds || calculatedSecs;
+    const mins = Math.max(Math.round(durationSecs / 60), 1);
 
     return (
       <TouchableOpacity
