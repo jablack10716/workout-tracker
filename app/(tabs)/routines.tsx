@@ -1,11 +1,10 @@
 import { View, Text, FlatList, TouchableOpacity, ActivityIndicator } from 'react-native';
-import { Plus, ChevronRight, CalendarRange, CheckCircle, Sparkles } from 'lucide-react-native';
-import { useRouter, useFocusEffect } from 'expo-router';
+import { CalendarRange, CheckCircle } from 'lucide-react-native';
+import { useFocusEffect } from 'expo-router';
 import { supabase } from '../../src/lib/supabase';
 import { useState, useCallback } from 'react';
 
 export default function RoutinesScreen() {
-  const router = useRouter();
   const [routines, setRoutines] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -73,17 +72,10 @@ export default function RoutinesScreen() {
           )}
         </View>
 
-        <View className="flex-row justify-between items-center pt-2 border-t border-slate-800/80 mt-2">
+        <View className="pt-2 border-t border-slate-800/80 mt-2">
           <Text className="text-slate-400 text-xs">
             Current Day: {item.current_day} of {item.days_in_split}
           </Text>
-          <TouchableOpacity 
-            onPress={() => router.push('/routine-builder/new')}
-            className="flex-row items-center"
-          >
-            <Text className="text-indigo-400 text-xs font-semibold mr-1">View Split</Text>
-            <ChevronRight color="#818cf8" size={14} />
-          </TouchableOpacity>
         </View>
       </View>
     );
@@ -94,13 +86,6 @@ export default function RoutinesScreen() {
       {/* Screen Header */}
       <View className="flex-row justify-between items-center mb-6 mt-10 px-2">
         <Text className="text-2xl font-bold text-white">Routines & Splits</Text>
-        <TouchableOpacity 
-          onPress={() => router.push('/routine-builder/new')}
-          className="bg-blue-600 px-4 py-2.5 rounded-full flex-row items-center"
-        >
-          <Plus color="white" size={18} className="mr-1" />
-          <Text className="text-white font-bold text-sm">Create</Text>
-        </TouchableOpacity>
       </View>
 
       {loading ? (
@@ -112,17 +97,10 @@ export default function RoutinesScreen() {
           <View className="w-16 h-16 bg-slate-900 rounded-full items-center justify-center mb-4 border border-slate-800">
             <CalendarRange color="#60a5fa" size={32} />
           </View>
-          <Text className="text-white font-bold text-xl mb-2">No Routines Built Yet</Text>
+          <Text className="text-white font-bold text-xl mb-2">No Active Routines</Text>
           <Text className="text-slate-400 text-center leading-6 mb-6">
-            Create your custom split, assign exercises from your library, and test your target muscle volume before starting!
+            Routine creation will be available in a future enhancement.
           </Text>
-          <TouchableOpacity 
-            onPress={() => router.push('/routine-builder/new')}
-            className="bg-blue-600 px-6 py-3.5 rounded-2xl flex-row items-center"
-          >
-            <Sparkles color="white" size={18} className="mr-2" />
-            <Text className="text-white font-bold text-base">Launch Routine Builder</Text>
-          </TouchableOpacity>
         </View>
       ) : (
         <FlatList
