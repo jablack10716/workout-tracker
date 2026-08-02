@@ -1,5 +1,5 @@
 import { View, Text, ScrollView, TouchableOpacity } from 'react-native';
-import { Settings, Play, ChevronRight, Activity } from 'lucide-react-native';
+import { Settings, Play, ChevronRight, Activity, Plus } from 'lucide-react-native';
 import { supabase } from '../../src/lib/supabase';
 import { useEffect, useState, useCallback } from 'react';
 import { useRouter, useFocusEffect } from 'expo-router';
