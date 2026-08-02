@@ -16,9 +16,9 @@ type ExerciseOption = {
 type RoutineExerciseItem = {
   exercise_id: string;
   name: string;
-  planned_sets: number;
-  target_reps: number;
-  target_weight: number;
+  planned_sets: number | string;
+  target_reps: number | string;
+  target_weight: number | string | null;
   is_bodyweight_only: boolean;
   muscle_groups: Array<{ muscle_group: string; fraction: number }>;
 };
@@ -120,14 +120,39 @@ export default function RoutineBuilderScreen() {
     }
   };
 
-  // Add exercise to currently active day
-  const handleAddExerciseToActiveDay = (ex: ExerciseOption) => {
+  // Add exercise to currently active day (default target lbs to last completed set or null)
+  const handleAddExerciseToActiveDay = async (ex: ExerciseOption) => {
+    let initialWeight: number | null = null;
+
+    if (!ex.is_bodyweight_only) {
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+        if (session?.user?.id) {
+          const { data } = await supabase
+            .from('session_sets')
+            .select('weight, session_exercises!inner(exercise_id, sessions!inner(user_id))')
+            .eq('session_exercises.exercise_id', ex.id)
+            .eq('session_exercises.sessions.user_id', session.user.id)
+            .eq('is_completed', true)
+            .not('weight', 'is', null)
+            .order('created_at', { ascending: false })
+            .limit(1);
+
+          if (data && data.length > 0 && data[0].weight !== null && data[0].weight !== undefined) {
+            initialWeight = Number(data[0].weight);
+          }
+        }
+      } catch (err) {
+        console.error('Error fetching last completed weight:', err);
+      }
+    }
+
     const newExerciseItem: RoutineExerciseItem = {
       exercise_id: ex.id,
       name: ex.name,
       planned_sets: 3,
       target_reps: 10,
-      target_weight: ex.is_bodyweight_only ? 0 : 135,
+      target_weight: initialWeight,
       is_bodyweight_only: ex.is_bodyweight_only,
       muscle_groups: ex.exercise_muscle_groups || []
     };
@@ -254,9 +279,11 @@ export default function RoutineBuilderScreen() {
             routine_day_id: dayId,
             exercise_id: ex.exercise_id,
             order_index: idx + 1,
-            planned_sets: ex.planned_sets,
-            target_reps: ex.target_reps,
-            target_weight: ex.is_bodyweight_only ? null : ex.target_weight
+            planned_sets: Number(ex.planned_sets) || 3,
+            target_reps: Number(ex.target_reps) || 10,
+            target_weight: ex.is_bodyweight_only || ex.target_weight === null || ex.target_weight === ''
+              ? null
+              : Number(ex.target_weight)
           }));
 
           const { error: exErr } = await supabase.from('routine_exercises').insert(exerciseRows);
@@ -445,8 +472,13 @@ export default function RoutineBuilderScreen() {
                       <TextInput
                         className="text-white font-bold text-base"
                         keyboardType="number-pad"
-                        value={ex.planned_sets.toString()}
-                        onChangeText={(t) => handleUpdateExerciseProp(activeDayIndex, exIdx, 'planned_sets', parseInt(t, 10) || 0)}
+                        value={ex.planned_sets !== undefined && ex.planned_sets !== null ? String(ex.planned_sets) : ''}
+                        onChangeText={(t) => {
+                          const cleanVal = t.replace(/[^0-9]/g, '');
+                          handleUpdateExerciseProp(activeDayIndex, exIdx, 'planned_sets', cleanVal);
+                        }}
+                        placeholder="3"
+                        placeholderTextColor="#64748b"
                       />
                     </View>
                     <View className="flex-1 bg-slate-800 p-2.5 rounded-xl">
@@ -454,8 +486,13 @@ export default function RoutineBuilderScreen() {
                       <TextInput
                         className="text-white font-bold text-base"
                         keyboardType="number-pad"
-                        value={ex.target_reps.toString()}
-                        onChangeText={(t) => handleUpdateExerciseProp(activeDayIndex, exIdx, 'target_reps', parseInt(t, 10) || 0)}
+                        value={ex.target_reps !== undefined && ex.target_reps !== null ? String(ex.target_reps) : ''}
+                        onChangeText={(t) => {
+                          const cleanVal = t.replace(/[^0-9]/g, '');
+                          handleUpdateExerciseProp(activeDayIndex, exIdx, 'target_reps', cleanVal);
+                        }}
+                        placeholder="10"
+                        placeholderTextColor="#64748b"
                       />
                     </View>
                     {!ex.is_bodyweight_only && (
@@ -463,9 +500,14 @@ export default function RoutineBuilderScreen() {
                         <Text className="text-slate-400 text-xs mb-1">Target (lbs)</Text>
                         <TextInput
                           className="text-white font-bold text-base"
-                          keyboardType="number-pad"
-                          value={ex.target_weight.toString()}
-                          onChangeText={(t) => handleUpdateExerciseProp(activeDayIndex, exIdx, 'target_weight', parseFloat(t) || 0)}
+                          keyboardType="decimal-pad"
+                          value={ex.target_weight !== undefined && ex.target_weight !== null ? String(ex.target_weight) : ''}
+                          onChangeText={(t) => {
+                            const cleanVal = t.replace(/[^0-9.]/g, '');
+                            handleUpdateExerciseProp(activeDayIndex, exIdx, 'target_weight', cleanVal === '' ? null : cleanVal);
+                          }}
+                          placeholder="Blank"
+                          placeholderTextColor="#64748b"
                         />
                       </View>
                     )}
