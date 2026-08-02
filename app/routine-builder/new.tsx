@@ -52,40 +52,99 @@ export default function RoutineBuilderScreen() {
   const [availableExercises, setAvailableExercises] = useState<ExerciseOption[]>([]);
   const [fetchingExercises, setFetchingExercises] = useState(false);
 
-  // Sync days array when daysInSplit changes
-  useEffect(() => {
-    setDays((prevDays) => {
-      const updated: DaySplit[] = [];
-      for (let i = 1; i <= daysInSplit; i++) {
-        const existing = prevDays.find(d => d.day_number === i);
-        if (existing) {
-          updated.push(existing);
-        } else {
-          updated.push({
-            day_number: i,
-            name: `Day ${i}`,
-            exercises: []
-          });
-        }
-      }
-      return updated;
-    });
-  }, [daysInSplit]);
+  // New Exercise Inline Creation State
+  const [showCreateForm, setShowCreateForm] = useState(false);
+  const [creatingExercise, setCreatingExercise] = useState(false);
+  const [newExName, setNewExName] = useState('');
+  const [newExPrimaryMuscle, setNewExPrimaryMuscle] = useState<string>('Chest');
+  const [newExSecondaryMuscles, setNewExSecondaryMuscles] = useState<string[]>([]);
+  const [newExIsBodyweight, setNewExIsBodyweight] = useState(false);
 
   // Load available exercises from library
-  useEffect(() => {
+  const fetchAvailableExercises = async () => {
     setFetchingExercises(true);
-    supabase
+    const { data, error } = await supabase
       .from('exercises')
       .select('*, exercise_muscle_groups(*)')
-      .order('name')
-      .then(({ data, error }) => {
-        if (!error && data) {
-          setAvailableExercises(data);
-        }
-        setFetchingExercises(false);
-      });
+      .order('name');
+    if (!error && data) {
+      setAvailableExercises(data);
+    }
+    setFetchingExercises(false);
+  };
+
+  useEffect(() => {
+    fetchAvailableExercises();
   }, []);
+
+  // Handle creating custom exercise and auto-selecting it
+  const handleCreateAndSelectExercise = async () => {
+    if (!newExName.trim()) {
+      Alert.alert('Required', 'Please enter an exercise name.');
+      return;
+    }
+
+    setCreatingExercise(true);
+    const { data: { session } } = await supabase.auth.getSession();
+    const userId = session?.user?.id;
+
+    if (!userId) {
+      Alert.alert('Error', 'You must be logged in to create an exercise.');
+      setCreatingExercise(false);
+      return;
+    }
+
+    try {
+      // 1. Insert exercise
+      const { data: exData, error: exErr } = await supabase
+        .from('exercises')
+        .insert([{
+          user_id: userId,
+          name: newExName.trim(),
+          is_bodyweight_only: newExIsBodyweight,
+          default_rest_timer_seconds: 90,
+          updated_at: new Date().toISOString()
+        }])
+        .select()
+        .single();
+
+      if (exErr || !exData) throw exErr || new Error('Failed to create exercise');
+
+      // 2. Insert muscle groups
+      const muscleRows = [
+        { exercise_id: exData.id, muscle_group: newExPrimaryMuscle, fraction: 1.0 },
+        ...newExSecondaryMuscles.filter(m => m !== newExPrimaryMuscle).map(m => ({
+          exercise_id: exData.id,
+          muscle_group: m,
+          fraction: 0.5
+        }))
+      ];
+
+      await supabase.from('exercise_muscle_groups').insert(muscleRows);
+
+      const createdOption: ExerciseOption = {
+        id: exData.id,
+        name: exData.name,
+        is_bodyweight_only: exData.is_bodyweight_only,
+        exercise_muscle_groups: muscleRows.map(r => ({ muscle_group: r.muscle_group, fraction: r.fraction }))
+      };
+
+      // Refresh list & select exercise
+      await fetchAvailableExercises();
+      await handleAddExerciseToActiveDay(createdOption);
+
+      // Reset create state
+      setCreatingExercise(false);
+      setShowCreateForm(false);
+      setNewExName('');
+      setNewExPrimaryMuscle('Chest');
+      setNewExSecondaryMuscles([]);
+      setNewExIsBodyweight(false);
+    } catch (err: any) {
+      setCreatingExercise(false);
+      Alert.alert('Create Error', err.message || 'Failed to create exercise');
+    }
+  };
 
   // Starter Template Presets
   const applyTemplate = (templateType: 'PPL' | 'UpperLower' | 'FullBody') => {
@@ -625,13 +684,146 @@ export default function RoutineBuilderScreen() {
       <Modal visible={pickerVisible} animationType="slide" transparent>
         <View className="flex-1 bg-slate-950/95 p-6 pt-12">
           <View className="flex-row justify-between items-center mb-6">
-            <Text className="text-white text-2xl font-bold">Select Exercise</Text>
-            <TouchableOpacity onPress={() => setPickerVisible(false)} className="p-2 bg-slate-800 rounded-full">
-              <X color="#94a3b8" size={20} />
-            </TouchableOpacity>
+            <View>
+              <Text className="text-white text-2xl font-bold">
+                {showCreateForm ? 'Create Exercise' : 'Select Exercise'}
+              </Text>
+              {!showCreateForm && (
+                <Text className="text-slate-400 text-xs mt-0.5">
+                  Pick an exercise or add a new one to library
+                </Text>
+              )}
+            </View>
+            <View className="flex-row items-center gap-2">
+              {!showCreateForm ? (
+                <TouchableOpacity
+                  onPress={() => setShowCreateForm(true)}
+                  className="bg-blue-600/30 border border-blue-500/50 px-3 py-1.5 rounded-xl flex-row items-center"
+                >
+                  <Plus color="#60a5fa" size={16} className="mr-1" />
+                  <Text className="text-blue-300 font-bold text-xs">+ Add New</Text>
+                </TouchableOpacity>
+              ) : (
+                <TouchableOpacity
+                  onPress={() => setShowCreateForm(false)}
+                  className="bg-slate-800 px-3 py-1.5 rounded-xl mr-1"
+                >
+                  <Text className="text-slate-300 font-semibold text-xs">Back to List</Text>
+                </TouchableOpacity>
+              )}
+              <TouchableOpacity
+                onPress={() => {
+                  setPickerVisible(false);
+                  setShowCreateForm(false);
+                }}
+                className="p-2 bg-slate-800 rounded-full"
+              >
+                <X color="#94a3b8" size={20} />
+              </TouchableOpacity>
+            </View>
           </View>
 
-          {fetchingExercises ? (
+          {showCreateForm ? (
+            <ScrollView className="flex-1 space-y-4">
+              {/* Exercise Name */}
+              <View className="mb-3">
+                <Text className="text-slate-400 text-xs font-semibold uppercase mb-1">Exercise Name</Text>
+                <TextInput
+                  className="bg-slate-900 border border-slate-800 text-white p-3.5 rounded-xl font-medium"
+                  placeholder="e.g. Incline Dumbbell Press"
+                  placeholderTextColor="#64748b"
+                  value={newExName}
+                  onChangeText={setNewExName}
+                />
+              </View>
+
+              {/* Primary Muscle Group */}
+              <View className="mb-3">
+                <Text className="text-slate-400 text-xs font-semibold uppercase mb-2">Primary Muscle Group (1.0x Volume)</Text>
+                <View className="flex-row flex-wrap gap-2">
+                  {MUSCLE_GROUPS.map((m) => (
+                    <TouchableOpacity
+                      key={m}
+                      onPress={() => {
+                        setNewExPrimaryMuscle(m);
+                        setNewExSecondaryMuscles(prev => prev.filter(sec => sec !== m));
+                      }}
+                      className={`px-3.5 py-2 rounded-xl border mr-1 mb-1 ${
+                        newExPrimaryMuscle === m
+                          ? 'bg-blue-600 border-blue-500'
+                          : 'bg-slate-900 border-slate-800'
+                      }`}
+                    >
+                      <Text className={`font-semibold text-xs ${newExPrimaryMuscle === m ? 'text-white' : 'text-slate-400'}`}>
+                        {m}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              </View>
+
+              {/* Secondary Muscle Groups */}
+              <View className="mb-3">
+                <Text className="text-slate-400 text-xs font-semibold uppercase mb-2">Secondary Muscle Groups (0.5x Volume)</Text>
+                <View className="flex-row flex-wrap gap-2">
+                  {MUSCLE_GROUPS.filter(m => m !== newExPrimaryMuscle).map((m) => {
+                    const isSelected = newExSecondaryMuscles.includes(m);
+                    return (
+                      <TouchableOpacity
+                        key={m}
+                        onPress={() => {
+                          if (isSelected) {
+                            setNewExSecondaryMuscles(prev => prev.filter(sec => sec !== m));
+                          } else {
+                            setNewExSecondaryMuscles(prev => [...prev, m]);
+                          }
+                        }}
+                        className={`px-3 py-1.5 rounded-xl border mr-1 mb-1 ${
+                          isSelected
+                            ? 'bg-indigo-600/40 border-indigo-500'
+                            : 'bg-slate-900/60 border-slate-800'
+                        }`}
+                      >
+                        <Text className={`font-semibold text-xs ${isSelected ? 'text-indigo-200' : 'text-slate-500'}`}>
+                          {m}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+              </View>
+
+              {/* Bodyweight Toggle */}
+              <TouchableOpacity
+                onPress={() => setNewExIsBodyweight(!newExIsBodyweight)}
+                className="flex-row justify-between items-center bg-slate-900 border border-slate-800 p-4 rounded-xl mb-4"
+              >
+                <View className="flex-1 mr-3">
+                  <Text className="text-white font-semibold text-sm">Bodyweight-Only Exercise</Text>
+                  <Text className="text-slate-500 text-xs">Strips weight inputs across workout screens</Text>
+                </View>
+                <View className={`w-6 h-6 rounded-md items-center justify-center ${newExIsBodyweight ? 'bg-blue-600' : 'bg-slate-800 border border-slate-700'}`}>
+                  {newExIsBodyweight && <Check color="white" size={14} />}
+                </View>
+              </TouchableOpacity>
+
+              {/* Action Button */}
+              <TouchableOpacity
+                onPress={handleCreateAndSelectExercise}
+                disabled={creatingExercise}
+                className="bg-blue-600 p-4 rounded-2xl items-center flex-row justify-center mb-8"
+              >
+                {creatingExercise ? (
+                  <ActivityIndicator color="white" />
+                ) : (
+                  <>
+                    <Plus color="white" size={18} className="mr-2" />
+                    <Text className="text-white font-bold text-base">Create & Add to Routine</Text>
+                  </>
+                )}
+              </TouchableOpacity>
+            </ScrollView>
+          ) : fetchingExercises ? (
             <ActivityIndicator color="#3b82f6" size="large" className="my-10" />
           ) : (
             <ScrollView className="flex-1 space-y-3">
