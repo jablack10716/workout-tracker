@@ -517,15 +517,35 @@ export default function RoutineBuilderScreen() {
             )}
           </ScrollView>
 
-          {/* Navigation Buttons */}
-          <View className="flex-row gap-3 pt-3">
-            <TouchableOpacity onPress={() => setStep(1)} className="bg-slate-800 p-4 rounded-2xl flex-1 items-center">
-              <Text className="text-slate-300 font-bold">Back</Text>
+          {/* Navigation & Action Buttons */}
+          <View className="pt-3 border-t border-slate-900 mt-2">
+            <TouchableOpacity
+              onPress={() => setStep(3)}
+              className="bg-indigo-600 p-4 rounded-2xl flex-row items-center justify-center mb-3"
+            >
+              <Text className="text-white font-bold text-base mr-2">Next: Review & Save Routine</Text>
+              <ChevronRight color="white" size={20} />
             </TouchableOpacity>
-            <TouchableOpacity onPress={() => setStep(3)} className="bg-indigo-600 p-4 rounded-2xl flex-2 flex-row items-center justify-center">
-              <Text className="text-white font-bold text-base mr-2">Volumetric Review</Text>
-              <Sparkles color="white" size={18} />
-            </TouchableOpacity>
+
+            <View className="flex-row gap-3">
+              <TouchableOpacity onPress={() => setStep(1)} className="bg-slate-800 p-3.5 rounded-2xl flex-1 items-center justify-center">
+                <Text className="text-slate-300 font-semibold">Back</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={() => handleCommitRoutine(true)}
+                disabled={loading}
+                className="bg-blue-600 p-3.5 rounded-2xl flex-1 items-center flex-row justify-center"
+              >
+                {loading ? (
+                  <ActivityIndicator color="white" size="small" />
+                ) : (
+                  <>
+                    <Check color="white" size={16} className="mr-1.5" />
+                    <Text className="text-white font-bold text-sm">Save & Activate</Text>
+                  </>
+                )}
+              </TouchableOpacity>
+            </View>
           </View>
         </View>
       )}
