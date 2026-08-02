@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo } from 'react';
 import { View, Text, TextInput, TouchableOpacity, ScrollView, Alert, ActivityIndicator, Modal } from 'react-native';
 import { useRouter } from 'expo-router';
 import { supabase } from '../../src/lib/supabase';
-import { X, Plus, Trash2, ChevronRight, Check, Sparkles, AlertCircle, Dumbbell } from 'lucide-react-native';
+import { X, Plus, Trash2, ChevronRight, Check, Sparkles, AlertCircle, Dumbbell, Search } from 'lucide-react-native';
 
 const MUSCLE_GROUPS = ['Chest', 'Back', 'Shoulders', 'Legs', 'Biceps', 'Triceps'] as const;
 
@@ -51,6 +51,20 @@ export default function RoutineBuilderScreen() {
   const [pickerVisible, setPickerVisible] = useState(false);
   const [availableExercises, setAvailableExercises] = useState<ExerciseOption[]>([]);
   const [fetchingExercises, setFetchingExercises] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+
+  // Filtered exercises based on search query
+  const filteredExercises = useMemo(() => {
+    if (!searchQuery.trim()) return availableExercises;
+    const q = searchQuery.toLowerCase().trim();
+    return availableExercises.filter((ex) => {
+      const nameMatch = ex.name.toLowerCase().includes(q);
+      const muscleMatch = ex.exercise_muscle_groups?.some(m =>
+        m.muscle_group.toLowerCase().includes(q)
+      );
+      return nameMatch || muscleMatch;
+    });
+  }, [availableExercises, searchQuery]);
 
   // New Exercise Inline Creation State
   const [showCreateForm, setShowCreateForm] = useState(false);
@@ -786,23 +800,61 @@ export default function RoutineBuilderScreen() {
           ) : fetchingExercises ? (
             <ActivityIndicator color="#3b82f6" size="large" className="my-10" />
           ) : (
-            <ScrollView className="flex-1 space-y-3">
-              {availableExercises.map((ex) => (
-                <TouchableOpacity
-                  key={ex.id}
-                  onPress={() => handleAddExerciseToActiveDay(ex)}
-                  className="bg-slate-900 p-4 rounded-xl border border-slate-800 flex-row justify-between items-center mb-3"
-                >
-                  <View>
-                    <Text className="text-white font-bold text-base">{ex.name}</Text>
-                    <Text className="text-slate-400 text-xs mt-1">
-                      {ex.exercise_muscle_groups?.map(m => `${m.muscle_group} (${m.fraction}x)`).join(', ') || 'No muscle mapped'}
-                    </Text>
-                  </View>
-                  <Plus color="#3b82f6" size={20} />
-                </TouchableOpacity>
-              ))}
-            </ScrollView>
+            <View className="flex-1">
+              {/* Search Bar */}
+              <View className="flex-row items-center bg-slate-900 border border-slate-800 rounded-xl px-3.5 py-2.5 mb-4">
+                <Search color="#94a3b8" size={18} className="mr-2" />
+                <TextInput
+                  className="flex-1 text-white font-medium text-sm"
+                  placeholder="Search exercises by name or muscle..."
+                  placeholderTextColor="#64748b"
+                  value={searchQuery}
+                  onChangeText={setSearchQuery}
+                />
+                {searchQuery.length > 0 && (
+                  <TouchableOpacity onPress={() => setSearchQuery('')} className="p-1">
+                    <X color="#94a3b8" size={16} />
+                  </TouchableOpacity>
+                )}
+              </View>
+
+              {filteredExercises.length === 0 ? (
+                <View className="flex-1 items-center justify-center py-10 px-4">
+                  <Dumbbell color="#64748b" size={32} className="mb-2" />
+                  <Text className="text-slate-400 text-center font-medium mb-4">
+                    No exercises found matching "{searchQuery}"
+                  </Text>
+                  <TouchableOpacity
+                    onPress={() => {
+                      setNewExName(searchQuery);
+                      setShowCreateForm(true);
+                    }}
+                    className="bg-blue-600 px-4 py-2 rounded-xl flex-row items-center"
+                  >
+                    <Plus color="white" size={16} className="mr-1" />
+                    <Text className="text-white font-bold text-sm">Create "{searchQuery}"</Text>
+                  </TouchableOpacity>
+                </View>
+              ) : (
+                <ScrollView className="flex-1 space-y-3">
+                  {filteredExercises.map((ex) => (
+                    <TouchableOpacity
+                      key={ex.id}
+                      onPress={() => handleAddExerciseToActiveDay(ex)}
+                      className="bg-slate-900 p-4 rounded-xl border border-slate-800 flex-row justify-between items-center mb-3"
+                    >
+                      <View>
+                        <Text className="text-white font-bold text-base">{ex.name}</Text>
+                        <Text className="text-slate-400 text-xs mt-1">
+                          {ex.exercise_muscle_groups?.map(m => `${m.muscle_group} (${m.fraction}x)`).join(', ') || 'No muscle mapped'}
+                        </Text>
+                      </View>
+                      <Plus color="#3b82f6" size={20} />
+                    </TouchableOpacity>
+                  ))}
+                </ScrollView>
+              )}
+            </View>
           )}
         </View>
       </Modal>
