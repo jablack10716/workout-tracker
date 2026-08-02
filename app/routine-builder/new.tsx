@@ -146,38 +146,7 @@ export default function RoutineBuilderScreen() {
     }
   };
 
-  // Starter Template Presets
-  const applyTemplate = (templateType: 'PPL' | 'UpperLower' | 'FullBody') => {
-    if (templateType === 'PPL') {
-      setRoutineName('Push / Pull / Legs Split');
-      setDaysInSplit(3);
-      setCyclesPerRoutine(4);
-      setDays([
-        { day_number: 1, name: 'Push Day', exercises: [] },
-        { day_number: 2, name: 'Pull Day', exercises: [] },
-        { day_number: 3, name: 'Leg Day', exercises: [] },
-      ]);
-    } else if (templateType === 'UpperLower') {
-      setRoutineName('Upper / Lower Split');
-      setDaysInSplit(4);
-      setCyclesPerRoutine(4);
-      setDays([
-        { day_number: 1, name: 'Upper Body A', exercises: [] },
-        { day_number: 2, name: 'Lower Body A', exercises: [] },
-        { day_number: 3, name: 'Upper Body B', exercises: [] },
-        { day_number: 4, name: 'Lower Body B', exercises: [] },
-      ]);
-    } else if (templateType === 'FullBody') {
-      setRoutineName('Full Body 3-Day Split');
-      setDaysInSplit(3);
-      setCyclesPerRoutine(4);
-      setDays([
-        { day_number: 1, name: 'Full Body A', exercises: [] },
-        { day_number: 2, name: 'Full Body B', exercises: [] },
-        { day_number: 3, name: 'Full Body C', exercises: [] },
-      ]);
-    }
-  };
+
 
   // Add exercise to currently active day (default target lbs to last completed set or null)
   const handleAddExerciseToActiveDay = async (ex: ExerciseOption) => {
@@ -433,24 +402,7 @@ export default function RoutineBuilderScreen() {
             </View>
           </View>
 
-          {/* Starter Templates */}
-          <View className="bg-slate-900/60 p-5 rounded-2xl border border-slate-800/80 mb-6">
-            <View className="flex-row items-center mb-3">
-              <Sparkles color="#a78bfa" size={18} className="mr-2" />
-              <Text className="text-white font-bold text-base">Start from Template</Text>
-            </View>
-            <View className="flex-row gap-2">
-              <TouchableOpacity onPress={() => applyTemplate('PPL')} className="flex-1 bg-slate-800 p-3 rounded-xl border border-slate-700 items-center">
-                <Text className="text-indigo-300 font-semibold text-xs">PPL 3-Day</Text>
-              </TouchableOpacity>
-              <TouchableOpacity onPress={() => applyTemplate('UpperLower')} className="flex-1 bg-slate-800 p-3 rounded-xl border border-slate-700 items-center">
-                <Text className="text-indigo-300 font-semibold text-xs">Upper/Lower</Text>
-              </TouchableOpacity>
-              <TouchableOpacity onPress={() => applyTemplate('FullBody')} className="flex-1 bg-slate-800 p-3 rounded-xl border border-slate-700 items-center">
-                <Text className="text-indigo-300 font-semibold text-xs">Full Body</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
+
 
           <TouchableOpacity
             onPress={() => setStep(2)}
