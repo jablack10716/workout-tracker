@@ -107,20 +107,13 @@ export default function DashboardScreen() {
         ) : (
           /* Onboarding Card when no routine is active */
           <View className="bg-slate-900/60 p-6 rounded-3xl border border-slate-800 mb-8">
-            <View className="flex-row items-center mb-3">
+            <View className="flex-row items-center mb-2">
               <Activity color="#60a5fa" size={24} className="mr-3" />
               <Text className="text-white text-xl font-bold">No Active Routine</Text>
             </View>
-            <Text className="text-slate-400 mb-6 leading-6">
-              Build your custom split and test your target muscle volume allocation before starting your next workout cycle.
+            <Text className="text-slate-400 leading-6">
+              Routine management and cycle rotation will be available in a future enhancement.
             </Text>
-            <TouchableOpacity 
-              onPress={() => router.push('/(tabs)/routines')} 
-              className="bg-blue-600 flex-row items-center justify-center p-4 rounded-2xl"
-            >
-              <Text className="text-white font-bold text-lg mr-2">Build Your First Routine</Text>
-              <ChevronRight color="white" size={20} />
-            </TouchableOpacity>
           </View>
         )}
 
