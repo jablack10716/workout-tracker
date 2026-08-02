@@ -346,6 +346,9 @@ export default function RoutineBuilderScreen() {
       {/* Header & Step Wizard Bar */}
       <View className="flex-row justify-between items-center mb-6">
         <View>
+          <Text className="text-blue-500 text-xs font-bold uppercase tracking-widest mb-0.5">
+            Best Damn Weight Lifting Tracker Ever
+          </Text>
           <Text className="text-slate-400 text-xs font-semibold uppercase tracking-wider">
             Step {step} of 3 • Sandbox Mode
           </Text>

@@ -46,7 +46,12 @@ export default function SettingsScreen() {
     <View className="flex-1 bg-slate-950 p-6 pt-12">
       {/* Modal Header */}
       <View className="flex-row justify-between items-center mb-8 border-b border-slate-800 pb-4">
-        <Text className="text-white text-2xl font-bold">Settings</Text>
+        <View>
+          <Text className="text-blue-500 text-xs font-bold uppercase tracking-widest mb-0.5">
+            Best Damn Weight Lifting Tracker Ever
+          </Text>
+          <Text className="text-white text-2xl font-bold">Settings</Text>
+        </View>
         <TouchableOpacity 
           onPress={() => router.back()} 
           className="w-10 h-10 bg-slate-800/80 rounded-full items-center justify-center"

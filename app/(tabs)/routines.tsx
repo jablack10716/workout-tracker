@@ -93,7 +93,12 @@ export default function RoutinesScreen() {
     <View className="flex-1 bg-slate-950 p-4">
       {/* Screen Header */}
       <View className="flex-row justify-between items-center mb-6 mt-10 px-2">
-        <Text className="text-2xl font-bold text-white">Routines & Splits</Text>
+        <View>
+          <Text className="text-blue-500 text-xs font-bold uppercase tracking-widest mb-0.5">
+            Best Damn Weight Lifting Tracker Ever
+          </Text>
+          <Text className="text-2xl font-bold text-white">Routines & Splits</Text>
+        </View>
         <TouchableOpacity 
           onPress={() => router.push('/routine-builder/new')}
           className="bg-blue-600 px-4 py-2.5 rounded-full flex-row items-center"

@@ -157,6 +157,10 @@ export default function WorkoutCompleteScreen() {
   return (
     <View className="flex-1 bg-slate-950 p-6 pt-16 justify-between">
       <ScrollView className="flex-1">
+        {/* App Branding */}
+        <Text className="text-blue-500 text-xs font-bold uppercase tracking-widest text-center mb-2">
+          Best Damn Weight Lifting Tracker Ever
+        </Text>
         {/* Top Trophy Banner */}
         <View className="items-center my-6">
           <View className="w-20 h-20 bg-amber-500/20 rounded-full items-center justify-center border-2 border-amber-500/50 mb-4 shadow-xl shadow-amber-900/30">

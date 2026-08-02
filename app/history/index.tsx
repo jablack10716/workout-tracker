@@ -117,7 +117,9 @@ export default function HistoryScreen() {
       {/* Header */}
       <View className="flex-row justify-between items-center mb-6 mt-10 px-2">
         <View>
-          <Text className="text-slate-400 text-xs font-semibold uppercase tracking-wider">Logbook</Text>
+          <Text className="text-blue-500 text-xs font-bold uppercase tracking-widest mb-0.5">
+            Best Damn Weight Lifting Tracker Ever
+          </Text>
           <Text className="text-2xl font-bold text-white">Workout History</Text>
         </View>
         <TouchableOpacity 

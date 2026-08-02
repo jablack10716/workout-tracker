@@ -80,6 +80,9 @@ export default function SessionDetailScreen() {
           <ChevronLeft color="#94a3b8" size={20} />
         </TouchableOpacity>
         <View>
+          <Text className="text-blue-500 text-xs font-bold uppercase tracking-widest mb-0.5">
+            Best Damn Weight Lifting Tracker Ever
+          </Text>
           <Text className="text-slate-400 text-xs font-semibold uppercase">{session.routines?.name || 'Workout'}</Text>
           <Text className="text-white text-xl font-bold">{dateStr}</Text>
         </View>

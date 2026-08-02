@@ -267,7 +267,10 @@ export default function ActiveWorkoutScreen() {
       {/* Top Navigation Header */}
       <View className="px-6 pt-12 pb-4 bg-slate-900 border-b border-slate-800 flex-row justify-between items-center">
         <View>
-          <Text className="text-blue-400 font-bold text-xs uppercase tracking-wider">
+          <Text className="text-blue-500 text-xs font-bold uppercase tracking-widest mb-0.5">
+            Best Damn Weight Lifting Tracker Ever
+          </Text>
+          <Text className="text-slate-400 font-semibold text-xs uppercase tracking-wider">
             {activeRoutine?.name} • Day {activeRoutine?.current_day}
           </Text>
           <Text className="text-white text-2xl font-bold">{activeDayName}</Text>

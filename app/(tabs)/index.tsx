@@ -65,6 +65,9 @@ export default function DashboardScreen() {
       <View className="px-6 pt-16 pb-8">
         <View className="flex-row justify-between items-center mb-8">
           <View>
+            <Text className="text-blue-500 text-xs font-bold uppercase tracking-widest mb-1">
+              Best Damn Weight Lifting Tracker Ever
+            </Text>
             <Text className="text-slate-400 text-lg">Welcome back,</Text>
             <Text className="text-white text-3xl font-bold">{displayName}</Text>
           </View>

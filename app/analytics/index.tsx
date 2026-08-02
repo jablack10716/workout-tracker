@@ -137,8 +137,10 @@ export default function AnalyticsScreen() {
             <ChevronLeft color="#94a3b8" size={20} />
           </TouchableOpacity>
           <View>
-            <Text className="text-slate-400 text-xs font-semibold uppercase">Analytics & Intelligence</Text>
-            <Text className="text-2xl font-bold text-white">Performance</Text>
+            <Text className="text-blue-500 text-xs font-bold uppercase tracking-widest mb-0.5">
+              Best Damn Weight Lifting Tracker Ever
+            </Text>
+            <Text className="text-2xl font-bold text-white">Performance Analytics</Text>
           </View>
         </View>
 

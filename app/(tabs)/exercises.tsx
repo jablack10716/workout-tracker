@@ -67,7 +67,12 @@ export default function ExercisesScreen() {
     <View className="flex-1 bg-slate-900 p-4">
       {/* Screen Header */}
       <View className="flex-row justify-between items-center mb-4 mt-10">
-        <Text className="text-2xl font-bold text-white">Exercise Library</Text>
+        <View>
+          <Text className="text-blue-500 text-xs font-bold uppercase tracking-widest mb-0.5">
+            Best Damn Weight Lifting Tracker Ever
+          </Text>
+          <Text className="text-2xl font-bold text-white">Exercise Library</Text>
+        </View>
         <TouchableOpacity 
           onPress={() => router.push('/exercises/new')}
           className="bg-blue-600 p-2.5 rounded-full"
