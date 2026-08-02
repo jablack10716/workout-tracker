@@ -41,9 +41,9 @@ export default function RoutineBuilderScreen() {
 
   // Step 2 State
   const [days, setDays] = useState<DaySplit[]>([
-    { day_number: 1, name: 'Day 1: Push', exercises: [] },
-    { day_number: 2, name: 'Day 2: Pull', exercises: [] },
-    { day_number: 3, name: 'Day 3: Legs', exercises: [] },
+    { day_number: 1, name: 'Day 1', exercises: [] },
+    { day_number: 2, name: 'Day 2', exercises: [] },
+    { day_number: 3, name: 'Day 3', exercises: [] },
   ]);
   const [activeDayIndex, setActiveDayIndex] = useState(0);
 
