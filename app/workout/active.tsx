@@ -308,11 +308,11 @@ export default function ActiveWorkoutScreen() {
 
             {/* Set Table Column Headers */}
             <View className="flex-row items-center py-2 px-3 mb-1">
-              <Text className="w-10 text-slate-500 text-xs font-bold text-center">SET</Text>
-              <Text className="w-24 text-slate-500 text-xs font-bold px-1">PREVIOUS</Text>
+              <Text className="w-8 text-slate-500 text-xs font-bold text-center">SET</Text>
+              <Text className="w-20 text-slate-500 text-xs font-bold px-1">PREVIOUS</Text>
               <Text className="flex-1 text-slate-500 text-xs font-bold text-center">LBS</Text>
               <Text className="flex-1 text-slate-500 text-xs font-bold text-center">REPS</Text>
-              <Text className="w-12 text-slate-500 text-xs font-bold text-right">DONE</Text>
+              <Text className="w-10 text-slate-500 text-xs font-bold text-right">DONE</Text>
             </View>
 
             {/* Set Rows */}
@@ -347,10 +347,12 @@ export default function ActiveWorkoutScreen() {
               </View>
               <View className="flex-row items-center bg-slate-800 px-3 py-1.5 rounded-xl border border-slate-700">
                 <TextInput
-                  className="text-white font-bold text-sm w-12 text-center"
+                  className="text-white font-bold text-sm w-16 text-center"
+                  style={{ textAlignVertical: 'center', includeFontPadding: false }}
                   keyboardType="numeric"
                   value={ex.next_target_weight}
                   onChangeText={(v) => handleChangeNextTarget(exIdx, v)}
+                  selectTextOnFocus
                 />
                 <Text className="text-slate-400 text-xs font-medium ml-1">lbs</Text>
               </View>
