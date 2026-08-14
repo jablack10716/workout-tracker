@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
-import { View, Text, ScrollView, TouchableOpacity, Alert, ActivityIndicator, TextInput } from 'react-native';
+import { View, Text, ScrollView, TouchableOpacity, Alert, ActivityIndicator, TextInput, Platform } from 'react-native';
 import { useRouter } from 'expo-router';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { supabase } from '../../src/lib/supabase';
 import { SetRow } from '../../src/components/SetRow';
 import { X, Check, Timer, Plus, FastForward, Dumbbell, Sparkles, ArrowRight } from 'lucide-react-native';
@@ -26,6 +27,7 @@ type WorkoutExerciseItem = {
 
 export default function ActiveWorkoutScreen() {
   const router = useRouter();
+  const insets = useSafeAreaInsets();
   const [loading, setLoading] = useState(true);
   const [activeRoutine, setActiveRoutine] = useState<any>(null);
   const [activeDayName, setActiveDayName] = useState('Workout');
@@ -262,11 +264,39 @@ export default function ActiveWorkoutScreen() {
     return `${m < 10 ? '0' : ''}${m}:${s < 10 ? '0' : ''}${s}`;
   };
 
+  const handleCloseWorkout = () => {
+    const exitWorkout = () => {
+      if (router.canGoBack()) {
+        router.back();
+      } else {
+        router.replace('/(tabs)');
+      }
+    };
+
+    if (Platform.OS === 'web') {
+      if (typeof window !== 'undefined' && window.confirm('Discard Workout? Are you sure you want to exit without saving?')) {
+        exitWorkout();
+      }
+    } else {
+      Alert.alert(
+        'Discard Workout?',
+        'Are you sure you want to exit without saving?',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          { text: 'Discard', style: 'destructive', onPress: exitWorkout }
+        ]
+      );
+    }
+  };
+
   return (
     <View className="flex-1 bg-slate-950">
       {/* Top Navigation Header */}
-      <View className="px-6 pt-12 pb-4 bg-slate-900 border-b border-slate-800 flex-row justify-between items-center">
-        <View>
+      <View 
+        style={{ paddingTop: Math.max(insets.top, 16) + 8 }}
+        className="px-6 pb-4 bg-slate-900 border-b border-slate-800 flex-row justify-between items-center"
+      >
+        <View className="flex-1 mr-3">
           <Text className="text-blue-500 text-xs font-bold uppercase tracking-widest mb-0.5">
             Best Damn Weight Lifting Tracker Ever
           </Text>
@@ -276,15 +306,12 @@ export default function ActiveWorkoutScreen() {
           <Text className="text-white text-2xl font-bold">{activeDayName}</Text>
         </View>
         <TouchableOpacity 
-          onPress={() => {
-            Alert.alert('Discard Workout?', 'Are you sure you want to exit without saving?', [
-              { text: 'Cancel', style: 'cancel' },
-              { text: 'Discard', style: 'destructive', onPress: () => router.back() }
-            ]);
-          }}
-          className="w-10 h-10 bg-slate-800 rounded-full items-center justify-center"
+          onPress={handleCloseWorkout}
+          hitSlop={{ top: 16, bottom: 16, left: 16, right: 16 }}
+          activeOpacity={0.7}
+          className="w-11 h-11 bg-slate-800 rounded-full items-center justify-center border border-slate-700"
         >
-          <X color="#94a3b8" size={20} />
+          <X color="#94a3b8" size={22} />
         </TouchableOpacity>
       </View>
 
