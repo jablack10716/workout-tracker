@@ -3,7 +3,6 @@ import { View, Text, ScrollView, TouchableOpacity, ActivityIndicator, Platform }
 import { useRouter } from 'expo-router';
 import { supabase } from '../../src/lib/supabase';
 import { Trophy, TrendingUp, Download, ChevronLeft, Award, Sparkles, Activity } from 'lucide-react-native';
-import { calculateTargetLoad } from '../../src/utils/autoRegEngine';
 
 type PREntry = {
   exercise_id: string;

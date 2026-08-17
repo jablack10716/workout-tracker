@@ -1,6 +1,10 @@
 import React, { useState } from 'react';
 import { View, Text, Modal, TouchableOpacity, ScrollView, Switch } from 'react-native';
-import { MuscleGroup } from '../database/types';
+
+export type MuscleGroup = {
+  id: string;
+  name: string;
+};
 
 export interface FeedbackData {
   muscle_group_id: string;

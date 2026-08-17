@@ -98,7 +98,9 @@ export default function WorkoutCompleteScreen() {
           .insert([{
             session_id: sessionId,
             exercise_id: ex.exercise_id,
-            next_target_weight: ex.is_bodyweight_only ? null : parseFloat(ex.next_target_weight) || null
+            next_target_weight: ex.is_bodyweight_only ? null : parseFloat(ex.next_target_weight) || null,
+            superset_id: ex.superset_id || null,
+            superset_order: ex.superset_order || 1
           }])
           .select()
           .single();
@@ -118,6 +120,17 @@ export default function WorkoutCompleteScreen() {
         if (setRows.length > 0) {
           const { error: setsErr } = await supabase.from('session_sets').insert(setRows);
           if (setsErr) console.warn('Error inserting session sets:', setsErr);
+        }
+
+        // Sync target weight back to routine_exercises for persistent routine baseline
+        if (ex.routine_exercise_id && ex.next_target_weight && !ex.is_bodyweight_only) {
+          const nextTargetNum = parseFloat(ex.next_target_weight);
+          if (!isNaN(nextTargetNum)) {
+            await supabase
+              .from('routine_exercises')
+              .update({ target_weight: nextTargetNum })
+              .eq('id', ex.routine_exercise_id);
+          }
         }
       }
 

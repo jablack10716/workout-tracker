@@ -2,9 +2,53 @@ import { useState, useEffect, useMemo } from 'react';
 import { View, Text, TextInput, TouchableOpacity, ScrollView, Alert, ActivityIndicator, Modal } from 'react-native';
 import { useRouter } from 'expo-router';
 import { supabase } from '../../src/lib/supabase';
-import { X, Plus, Trash2, ChevronRight, Check, Sparkles, AlertCircle, Dumbbell, Search } from 'lucide-react-native';
+import { X, Plus, Trash2, ChevronRight, Check, Sparkles, AlertCircle, Dumbbell, Search, Layers, Link2, Unlink } from 'lucide-react-native';
 
 const MUSCLE_GROUPS = ['Chest', 'Back', 'Shoulders', 'Legs', 'Biceps', 'Triceps'] as const;
+
+// Helper to determine muscle synergy for a group of exercises
+const getSupersetSynergy = (exercises: RoutineExerciseItem[]) => {
+  if (exercises.length < 2) return null;
+
+  const primaryMuscles: string[] = [];
+  exercises.forEach((ex) => {
+    ex.muscle_groups?.forEach((mg) => {
+      if (mg.fraction >= 1.0) {
+        primaryMuscles.push(mg.muscle_group);
+      }
+    });
+  });
+
+  const uniquePrimaries = new Set(primaryMuscles);
+
+  // If there are duplicate primary muscles, it's competing
+  if (primaryMuscles.length > uniquePrimaries.size) {
+    return {
+      type: 'competing',
+      label: 'Competing Muscles',
+      description: 'Multiple exercises target the same primary muscle'
+    };
+  }
+
+  // Check for antagonist pairings
+  const isChestBack = uniquePrimaries.has('Chest') && uniquePrimaries.has('Back');
+  const isBicepsTriceps = uniquePrimaries.has('Biceps') && uniquePrimaries.has('Triceps');
+  const isLegsUpper = uniquePrimaries.has('Legs') && (uniquePrimaries.has('Chest') || uniquePrimaries.has('Back') || uniquePrimaries.has('Shoulders'));
+
+  if (isChestBack || isBicepsTriceps) {
+    return {
+      type: 'antagonist',
+      label: 'Antagonist Synergy',
+      description: 'Opposing muscle groups maximize recovery'
+    };
+  }
+
+  return {
+    type: 'non_competing',
+    label: 'Non-Competing Pair',
+    description: 'Independent muscle groups run efficiently'
+  };
+};
 
 type ExerciseOption = {
   id: string;
@@ -21,6 +65,8 @@ type RoutineExerciseItem = {
   target_weight: number | string | null;
   is_bodyweight_only: boolean;
   muscle_groups: Array<{ muscle_group: string; fraction: number }>;
+  superset_id?: string | null;
+  superset_order?: number;
 };
 
 type DaySplit = {
@@ -49,6 +95,7 @@ export default function RoutineBuilderScreen() {
 
   // Exercise Picker Modal State
   const [pickerVisible, setPickerVisible] = useState(false);
+  const [targetSupersetIdForPicker, setTargetSupersetIdForPicker] = useState<string | null>(null);
   const [availableExercises, setAvailableExercises] = useState<ExerciseOption[]>([]);
   const [fetchingExercises, setFetchingExercises] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -145,7 +192,7 @@ export default function RoutineBuilderScreen() {
 
       // Refresh list & select exercise
       await fetchAvailableExercises();
-      await handleAddExerciseToActiveDay(createdOption);
+      await handleAddExerciseToActiveDay(createdOption, targetSupersetIdForPicker);
 
       // Reset create state
       setCreatingExercise(false);
@@ -160,10 +207,8 @@ export default function RoutineBuilderScreen() {
     }
   };
 
-
-
-  // Add exercise to currently active day (default target lbs to last completed set or null)
-  const handleAddExerciseToActiveDay = async (ex: ExerciseOption) => {
+  // Add exercise to currently active day (optionally to a superset)
+  const handleAddExerciseToActiveDay = async (ex: ExerciseOption, supersetId?: string | null) => {
     let initialWeight: number | null = null;
 
     if (!ex.is_bodyweight_only) {
@@ -189,30 +234,148 @@ export default function RoutineBuilderScreen() {
       }
     }
 
-    const newExerciseItem: RoutineExerciseItem = {
-      exercise_id: ex.id,
-      name: ex.name,
-      planned_sets: 3,
-      target_reps: 10,
-      target_weight: initialWeight,
-      is_bodyweight_only: ex.is_bodyweight_only,
-      muscle_groups: ex.exercise_muscle_groups || []
-    };
-
     setDays((prevDays) => {
       const copy = [...prevDays];
-      copy[activeDayIndex].exercises.push(newExerciseItem);
+      const currentDayExercises = copy[activeDayIndex].exercises;
+
+      let supersetOrder = 1;
+      if (supersetId) {
+        const existingInSuperset = currentDayExercises.filter(e => e.superset_id === supersetId);
+        supersetOrder = existingInSuperset.length + 1;
+      }
+
+      const newExerciseItem: RoutineExerciseItem = {
+        exercise_id: ex.id,
+        name: ex.name,
+        planned_sets: 3,
+        target_reps: 10,
+        target_weight: initialWeight,
+        is_bodyweight_only: ex.is_bodyweight_only,
+        muscle_groups: ex.exercise_muscle_groups || [],
+        superset_id: supersetId || null,
+        superset_order: supersetId ? supersetOrder : 1
+      };
+
+      if (supersetId) {
+        // Insert right after the last exercise of this superset if found
+        let lastSupersetIdx = -1;
+        for (let i = 0; i < currentDayExercises.length; i++) {
+          if (currentDayExercises[i].superset_id === supersetId) {
+            lastSupersetIdx = i;
+          }
+        }
+        if (lastSupersetIdx >= 0) {
+          currentDayExercises.splice(lastSupersetIdx + 1, 0, newExerciseItem);
+        } else {
+          currentDayExercises.push(newExerciseItem);
+        }
+      } else {
+        currentDayExercises.push(newExerciseItem);
+      }
+
       return copy;
     });
 
+    setTargetSupersetIdForPicker(null);
     setPickerVisible(false);
+  };
+
+  // Start creating a new Superset block
+  const handleStartAddSuperset = () => {
+    const newSupersetId = `ss_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+    setTargetSupersetIdForPicker(newSupersetId);
+    setPickerVisible(true);
+  };
+
+  // Add another exercise to an existing superset
+  const handleAddExerciseToSuperset = (supersetId: string) => {
+    setTargetSupersetIdForPicker(supersetId);
+    setPickerVisible(true);
+  };
+
+  // Link exercise with adjacent exercise into a superset
+  const handleLinkWithNext = (dayIdx: number, exIdx: number) => {
+    setDays((prevDays) => {
+      const copy = [...prevDays];
+      const dayExercises = copy[dayIdx].exercises;
+      if (exIdx >= dayExercises.length - 1) return prevDays;
+
+      const currentEx = dayExercises[exIdx];
+      const nextEx = dayExercises[exIdx + 1];
+
+      const targetSupersetId = currentEx.superset_id || nextEx.superset_id || `ss_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+
+      currentEx.superset_id = targetSupersetId;
+      nextEx.superset_id = targetSupersetId;
+
+      // Re-index superset_order for all exercises in this superset
+      let orderCounter = 1;
+      dayExercises.forEach((e) => {
+        if (e.superset_id === targetSupersetId) {
+          e.superset_order = orderCounter++;
+        }
+      });
+
+      return copy;
+    });
+  };
+
+  // Unlink an exercise from a superset
+  const handleUnlinkExercise = (dayIdx: number, exIdx: number) => {
+    setDays((prevDays) => {
+      const copy = [...prevDays];
+      const dayExercises = copy[dayIdx].exercises;
+      const targetSupersetId = dayExercises[exIdx].superset_id;
+
+      if (!targetSupersetId) return prevDays;
+
+      dayExercises[exIdx].superset_id = null;
+      dayExercises[exIdx].superset_order = 1;
+
+      // Check remaining exercises in this superset
+      const remaining = dayExercises.filter(e => e.superset_id === targetSupersetId);
+      if (remaining.length === 1) {
+        // If only 1 remains, convert it back to standalone
+        remaining[0].superset_id = null;
+        remaining[0].superset_order = 1;
+      } else {
+        // Re-index orders
+        let orderCounter = 1;
+        dayExercises.forEach((e) => {
+          if (e.superset_id === targetSupersetId) {
+            e.superset_order = orderCounter++;
+          }
+        });
+      }
+
+      return copy;
+    });
   };
 
   // Remove exercise from active day
   const handleRemoveExercise = (dayIdx: number, exIdx: number) => {
     setDays((prevDays) => {
       const copy = [...prevDays];
-      copy[dayIdx].exercises.splice(exIdx, 1);
+      const dayExercises = copy[dayIdx].exercises;
+      const targetSupersetId = dayExercises[exIdx].superset_id;
+
+      dayExercises.splice(exIdx, 1);
+
+      if (targetSupersetId) {
+        const remaining = dayExercises.filter(e => e.superset_id === targetSupersetId);
+        if (remaining.length === 1) {
+          remaining[0].superset_id = null;
+          remaining[0].superset_order = 1;
+        } else {
+          let orderCounter = 1;
+          dayExercises.forEach((e) => {
+            if (e.superset_id === targetSupersetId) {
+              e.superset_order = orderCounter++;
+            }
+          });
+        }
+      }
+
       return copy;
     });
   };
@@ -242,7 +405,7 @@ export default function RoutineBuilderScreen() {
 
     days.forEach((day) => {
       day.exercises.forEach((ex) => {
-        const sets = ex.planned_sets || 0;
+        const sets = Number(ex.planned_sets) || 0;
         ex.muscle_groups.forEach((m) => {
           const groupName = m.muscle_group;
           const fraction = Number(m.fraction) || 1.0;
@@ -325,7 +488,9 @@ export default function RoutineBuilderScreen() {
             target_reps: Number(ex.target_reps) || 10,
             target_weight: ex.is_bodyweight_only || ex.target_weight === null || ex.target_weight === ''
               ? null
-              : Number(ex.target_weight)
+              : Number(ex.target_weight),
+            superset_id: ex.superset_id || null,
+            superset_order: ex.superset_order || 1
           }));
 
           const { error: exErr } = await supabase.from('routine_exercises').insert(exerciseRows);
@@ -469,87 +634,287 @@ export default function RoutineBuilderScreen() {
                   });
                 }}
               />
-              {days[activeDayIndex]?.exercises.length > 0 && (
+              <View className="flex-row items-center gap-1.5 ml-2">
                 <TouchableOpacity
-                  onPress={() => setPickerVisible(true)}
-                  className="bg-blue-600/30 border border-blue-500/50 px-3 py-2 rounded-xl flex-row items-center ml-2"
+                  onPress={handleStartAddSuperset}
+                  className="bg-indigo-600/30 border border-indigo-500/50 px-2.5 py-2 rounded-xl flex-row items-center"
                 >
-                  <Plus color="#60a5fa" size={16} className="mr-1" />
-                  <Text className="text-blue-300 font-bold text-sm">Add</Text>
+                  <Layers color="#a78bfa" size={14} className="mr-1" />
+                  <Text className="text-indigo-300 font-bold text-xs">+ Superset</Text>
                 </TouchableOpacity>
-              )}
+
+                <TouchableOpacity
+                  onPress={() => {
+                    setTargetSupersetIdForPicker(null);
+                    setPickerVisible(true);
+                  }}
+                  className="bg-blue-600/30 border border-blue-500/50 px-2.5 py-2 rounded-xl flex-row items-center"
+                >
+                  <Plus color="#60a5fa" size={14} className="mr-1" />
+                  <Text className="text-blue-300 font-bold text-xs">+ Exercise</Text>
+                </TouchableOpacity>
+              </View>
             </View>
 
             {days[activeDayIndex]?.exercises.length === 0 ? (
               <View className="bg-slate-900/40 border border-dashed border-slate-800 p-8 rounded-2xl items-center justify-center my-6">
                 <Dumbbell color="#64748b" size={32} className="mb-2" />
                 <Text className="text-slate-400 text-center font-medium mb-4">No exercises assigned to this day yet.</Text>
-                <TouchableOpacity
-                  onPress={() => setPickerVisible(true)}
-                  className="bg-blue-600 px-5 py-2.5 rounded-xl flex-row items-center"
-                >
-                  <Plus color="white" size={18} className="mr-1.5" />
-                  <Text className="text-white font-bold text-sm">Add Exercise</Text>
-                </TouchableOpacity>
+                <View className="flex-row gap-3">
+                  <TouchableOpacity
+                    onPress={() => {
+                      setTargetSupersetIdForPicker(null);
+                      setPickerVisible(true);
+                    }}
+                    className="bg-blue-600 px-4 py-2.5 rounded-xl flex-row items-center"
+                  >
+                    <Plus color="white" size={16} className="mr-1.5" />
+                    <Text className="text-white font-bold text-sm">Add Exercise</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    onPress={handleStartAddSuperset}
+                    className="bg-indigo-600 px-4 py-2.5 rounded-xl flex-row items-center"
+                  >
+                    <Layers color="white" size={16} className="mr-1.5" />
+                    <Text className="text-white font-bold text-sm">Add Superset</Text>
+                  </TouchableOpacity>
+                </View>
               </View>
             ) : (
-              days[activeDayIndex]?.exercises.map((ex, exIdx) => (
-                <View key={exIdx} className="bg-slate-900 p-4 rounded-2xl border border-slate-800 mb-3">
-                  <View className="flex-row justify-between items-center mb-3">
-                    <Text className="text-white font-bold text-base">{ex.name}</Text>
-                    <TouchableOpacity onPress={() => handleRemoveExercise(activeDayIndex, exIdx)}>
-                      <Trash2 color="#ef4444" size={18} />
-                    </TouchableOpacity>
-                  </View>
+              (() => {
+                const currentExercises = days[activeDayIndex]?.exercises || [];
+                const supersetLetterMap: Record<string, string> = {};
+                let letterCode = 65; // 'A'
 
-                  <View className="flex-row gap-3">
-                    <View className="flex-1 bg-slate-800 p-2.5 rounded-xl">
-                      <Text className="text-slate-400 text-xs mb-1">Sets</Text>
-                      <TextInput
-                        className="text-white font-bold text-base"
-                        keyboardType="number-pad"
-                        value={ex.planned_sets !== undefined && ex.planned_sets !== null ? String(ex.planned_sets) : ''}
-                        onChangeText={(t) => {
-                          const cleanVal = t.replace(/[^0-9]/g, '');
-                          handleUpdateExerciseProp(activeDayIndex, exIdx, 'planned_sets', cleanVal);
-                        }}
-                        placeholder="3"
-                        placeholderTextColor="#64748b"
-                      />
-                    </View>
-                    <View className="flex-1 bg-slate-800 p-2.5 rounded-xl">
-                      <Text className="text-slate-400 text-xs mb-1">Target Reps</Text>
-                      <TextInput
-                        className="text-white font-bold text-base"
-                        keyboardType="number-pad"
-                        value={ex.target_reps !== undefined && ex.target_reps !== null ? String(ex.target_reps) : ''}
-                        onChangeText={(t) => {
-                          const cleanVal = t.replace(/[^0-9]/g, '');
-                          handleUpdateExerciseProp(activeDayIndex, exIdx, 'target_reps', cleanVal);
-                        }}
-                        placeholder="10"
-                        placeholderTextColor="#64748b"
-                      />
-                    </View>
-                    {!ex.is_bodyweight_only && (
-                      <View className="flex-1 bg-slate-800 p-2.5 rounded-xl">
-                        <Text className="text-slate-400 text-xs mb-1">Target (lbs)</Text>
-                        <TextInput
-                          className="text-white font-bold text-base"
-                          keyboardType="decimal-pad"
-                          value={ex.target_weight !== undefined && ex.target_weight !== null ? String(ex.target_weight) : ''}
-                          onChangeText={(t) => {
-                            const cleanVal = t.replace(/[^0-9.]/g, '');
-                            handleUpdateExerciseProp(activeDayIndex, exIdx, 'target_weight', cleanVal === '' ? null : cleanVal);
-                          }}
-                          placeholder="Blank"
-                          placeholderTextColor="#64748b"
-                        />
+                currentExercises.forEach((ex) => {
+                  if (ex.superset_id && !supersetLetterMap[ex.superset_id]) {
+                    supersetLetterMap[ex.superset_id] = String.fromCharCode(letterCode++);
+                  }
+                });
+
+                const processedSupersets = new Set<string>();
+                const elements: any[] = [];
+
+                for (let i = 0; i < currentExercises.length; i++) {
+                  const ex = currentExercises[i];
+
+                  if (!ex.superset_id) {
+                    const exIdx = i;
+                    const canLinkNext = exIdx < currentExercises.length - 1;
+
+                    elements.push(
+                      <View key={`standalone_${exIdx}`} className="bg-slate-900 p-4 rounded-2xl border border-slate-800 mb-3">
+                        <View className="flex-row justify-between items-center mb-3">
+                          <View className="flex-1 mr-2">
+                            <Text className="text-white font-bold text-base">{ex.name}</Text>
+                            <Text className="text-slate-400 text-xs">
+                              {ex.muscle_groups?.map(m => m.muscle_group).join(', ') || 'No muscle group'}
+                            </Text>
+                          </View>
+                          <View className="flex-row items-center gap-2">
+                            {canLinkNext && (
+                              <TouchableOpacity
+                                onPress={() => handleLinkWithNext(activeDayIndex, exIdx)}
+                                className="bg-indigo-950/80 border border-indigo-500/40 px-2.5 py-1.5 rounded-xl flex-row items-center"
+                              >
+                                <Link2 color="#a78bfa" size={13} className="mr-1" />
+                                <Text className="text-indigo-300 text-xs font-semibold">Pair Next</Text>
+                              </TouchableOpacity>
+                            )}
+                            <TouchableOpacity onPress={() => handleRemoveExercise(activeDayIndex, exIdx)} className="p-1">
+                              <Trash2 color="#ef4444" size={18} />
+                            </TouchableOpacity>
+                          </View>
+                        </View>
+
+                        <View className="flex-row gap-3">
+                          <View className="flex-1 bg-slate-800 p-2.5 rounded-xl">
+                            <Text className="text-slate-400 text-xs mb-1">Sets</Text>
+                            <TextInput
+                              className="text-white font-bold text-base"
+                              keyboardType="number-pad"
+                              value={ex.planned_sets !== undefined && ex.planned_sets !== null ? String(ex.planned_sets) : ''}
+                              onChangeText={(t) => {
+                                const cleanVal = t.replace(/[^0-9]/g, '');
+                                handleUpdateExerciseProp(activeDayIndex, exIdx, 'planned_sets', cleanVal);
+                              }}
+                              placeholder="3"
+                              placeholderTextColor="#64748b"
+                            />
+                          </View>
+                          <View className="flex-1 bg-slate-800 p-2.5 rounded-xl">
+                            <Text className="text-slate-400 text-xs mb-1">Target Reps</Text>
+                            <TextInput
+                              className="text-white font-bold text-base"
+                              keyboardType="number-pad"
+                              value={ex.target_reps !== undefined && ex.target_reps !== null ? String(ex.target_reps) : ''}
+                              onChangeText={(t) => {
+                                const cleanVal = t.replace(/[^0-9]/g, '');
+                                handleUpdateExerciseProp(activeDayIndex, exIdx, 'target_reps', cleanVal);
+                              }}
+                              placeholder="10"
+                              placeholderTextColor="#64748b"
+                            />
+                          </View>
+                          {!ex.is_bodyweight_only && (
+                            <View className="flex-1 bg-slate-800 p-2.5 rounded-xl">
+                              <Text className="text-slate-400 text-xs mb-1">Target (lbs)</Text>
+                              <TextInput
+                                className="text-white font-bold text-base"
+                                keyboardType="decimal-pad"
+                                value={ex.target_weight !== undefined && ex.target_weight !== null ? String(ex.target_weight) : ''}
+                                onChangeText={(t) => {
+                                  const cleanVal = t.replace(/[^0-9.]/g, '');
+                                  handleUpdateExerciseProp(activeDayIndex, exIdx, 'target_weight', cleanVal === '' ? null : cleanVal);
+                                }}
+                                placeholder="Blank"
+                                placeholderTextColor="#64748b"
+                              />
+                            </View>
+                          )}
+                        </View>
                       </View>
-                    )}
-                  </View>
-                </View>
-              ))
+                    );
+                  } else if (!processedSupersets.has(ex.superset_id)) {
+                    processedSupersets.add(ex.superset_id);
+                    const sId = ex.superset_id;
+                    const letter = supersetLetterMap[sId] || 'A';
+                    const groupItems = currentExercises
+                      .map((e, idx) => ({ exercise: e, originalIndex: idx }))
+                      .filter(item => item.exercise.superset_id === sId);
+
+                    const synergy = getSupersetSynergy(groupItems.map(g => g.exercise));
+
+                    elements.push(
+                      <View key={`superset_${sId}`} className="bg-indigo-950/20 border-2 border-indigo-500/40 rounded-3xl p-4 mb-4">
+                        {/* Superset Header */}
+                        <View className="flex-row justify-between items-center mb-3 pb-2.5 border-b border-indigo-500/20">
+                          <View className="flex-row items-center flex-wrap gap-1.5 flex-1 mr-2">
+                            <View className="bg-indigo-600 px-2.5 py-1 rounded-lg flex-row items-center">
+                              <Layers color="white" size={12} className="mr-1" />
+                              <Text className="text-white font-extrabold text-xs tracking-wider">SUPERSET {letter}</Text>
+                            </View>
+                            {synergy && (
+                              <View className={`px-2 py-0.5 rounded-md border ${
+                                synergy.type === 'antagonist'
+                                  ? 'bg-emerald-500/20 border-emerald-500/40'
+                                  : synergy.type === 'non_competing'
+                                  ? 'bg-teal-500/20 border-teal-500/40'
+                                  : 'bg-amber-500/20 border-amber-500/40'
+                              }`}>
+                                <Text className={`text-[11px] font-bold ${
+                                  synergy.type === 'antagonist'
+                                    ? 'text-emerald-300'
+                                    : synergy.type === 'non_competing'
+                                    ? 'text-teal-300'
+                                    : 'text-amber-300'
+                                }`}>
+                                  {synergy.label}
+                                </Text>
+                              </View>
+                            )}
+                          </View>
+
+                          <TouchableOpacity
+                            onPress={() => handleAddExerciseToSuperset(sId)}
+                            className="bg-indigo-600/30 border border-indigo-500/50 px-2 py-1 rounded-lg flex-row items-center"
+                          >
+                            <Plus color="#a78bfa" size={12} className="mr-0.5" />
+                            <Text className="text-indigo-200 text-xs font-bold">+ Add Paired</Text>
+                          </TouchableOpacity>
+                        </View>
+
+                        {/* Superset Exercises */}
+                        {groupItems.map((item, subIdx) => {
+                          const exItem = item.exercise;
+                          const originalIdx = item.originalIndex;
+                          const tag = `${letter}${exItem.superset_order || subIdx + 1}`;
+
+                          return (
+                            <View key={`sub_${originalIdx}`} className="bg-slate-900 p-3.5 rounded-2xl border border-slate-800 mb-2.5">
+                              <View className="flex-row justify-between items-center mb-2.5">
+                                <View className="flex-row items-center flex-1 mr-2">
+                                  <View className="bg-indigo-500/30 border border-indigo-500/50 px-2 py-0.5 rounded mr-2">
+                                    <Text className="text-indigo-300 font-mono font-bold text-xs">{tag}</Text>
+                                  </View>
+                                  <View className="flex-1">
+                                    <Text className="text-white font-bold text-sm">{exItem.name}</Text>
+                                    <Text className="text-slate-400 text-[11px]">
+                                      {exItem.muscle_groups?.map(m => m.muscle_group).join(', ') || 'No muscle group'}
+                                    </Text>
+                                  </View>
+                                </View>
+
+                                <View className="flex-row items-center gap-2">
+                                  <TouchableOpacity
+                                    onPress={() => handleUnlinkExercise(activeDayIndex, originalIdx)}
+                                    className="bg-slate-800 border border-slate-700 px-2 py-1 rounded-lg flex-row items-center"
+                                  >
+                                    <Unlink color="#94a3b8" size={12} className="mr-1" />
+                                    <Text className="text-slate-300 text-[11px] font-semibold">Unlink</Text>
+                                  </TouchableOpacity>
+                                  <TouchableOpacity onPress={() => handleRemoveExercise(activeDayIndex, originalIdx)} className="p-1">
+                                    <Trash2 color="#ef4444" size={16} />
+                                  </TouchableOpacity>
+                                </View>
+                              </View>
+
+                              <View className="flex-row gap-2">
+                                <View className="flex-1 bg-slate-800 p-2 rounded-xl">
+                                  <Text className="text-slate-400 text-[11px] mb-0.5">Sets</Text>
+                                  <TextInput
+                                    className="text-white font-bold text-sm"
+                                    keyboardType="number-pad"
+                                    value={exItem.planned_sets !== undefined && exItem.planned_sets !== null ? String(exItem.planned_sets) : ''}
+                                    onChangeText={(t) => {
+                                      const cleanVal = t.replace(/[^0-9]/g, '');
+                                      handleUpdateExerciseProp(activeDayIndex, originalIdx, 'planned_sets', cleanVal);
+                                    }}
+                                    placeholder="3"
+                                    placeholderTextColor="#64748b"
+                                  />
+                                </View>
+                                <View className="flex-1 bg-slate-800 p-2 rounded-xl">
+                                  <Text className="text-slate-400 text-[11px] mb-0.5">Target Reps</Text>
+                                  <TextInput
+                                    className="text-white font-bold text-sm"
+                                    keyboardType="number-pad"
+                                    value={exItem.target_reps !== undefined && exItem.target_reps !== null ? String(exItem.target_reps) : ''}
+                                    onChangeText={(t) => {
+                                      const cleanVal = t.replace(/[^0-9]/g, '');
+                                      handleUpdateExerciseProp(activeDayIndex, originalIdx, 'target_reps', cleanVal);
+                                    }}
+                                    placeholder="10"
+                                    placeholderTextColor="#64748b"
+                                  />
+                                </View>
+                                {!exItem.is_bodyweight_only && (
+                                  <View className="flex-1 bg-slate-800 p-2 rounded-xl">
+                                    <Text className="text-slate-400 text-[11px] mb-0.5">Target (lbs)</Text>
+                                    <TextInput
+                                      className="text-white font-bold text-sm"
+                                      keyboardType="decimal-pad"
+                                      value={exItem.target_weight !== undefined && exItem.target_weight !== null ? String(exItem.target_weight) : ''}
+                                      onChangeText={(t) => {
+                                        const cleanVal = t.replace(/[^0-9.]/g, '');
+                                        handleUpdateExerciseProp(activeDayIndex, originalIdx, 'target_weight', cleanVal === '' ? null : cleanVal);
+                                      }}
+                                      placeholder="Blank"
+                                      placeholderTextColor="#64748b"
+                                    />
+                                  </View>
+                                )}
+                              </View>
+                            </View>
+                          );
+                        })}
+                      </View>
+                    );
+                  }
+                }
+
+                return elements;
+              })()
             )}
           </ScrollView>
 
@@ -843,7 +1208,7 @@ export default function RoutineBuilderScreen() {
                   {filteredExercises.map((ex) => (
                     <TouchableOpacity
                       key={ex.id}
-                      onPress={() => handleAddExerciseToActiveDay(ex)}
+                      onPress={() => handleAddExerciseToActiveDay(ex, targetSupersetIdForPicker)}
                       className="bg-slate-900 p-4 rounded-xl border border-slate-800 flex-row justify-between items-center mb-3"
                     >
                       <View>
