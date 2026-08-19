@@ -24,11 +24,13 @@ import {
 } from 'lucide-react-native';
 import { supabase } from '../../src/lib/supabase';
 import { useRouter, useFocusEffect } from 'expo-router';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Circle } from 'react-native-svg';
 import { computeDashboardStats, DashboardStats } from '../../src/utils/dashboardMetrics';
 
 export default function DashboardScreen() {
   const router = useRouter();
+  const insets = useSafeAreaInsets();
   const [displayName, setDisplayName] = useState('');
   const [activeRoutine, setActiveRoutine] = useState<any>(null);
   const [allSessions, setAllSessions] = useState<any[]>([]);
@@ -121,19 +123,19 @@ export default function DashboardScreen() {
         <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#60a5fa" />
       }
     >
-      <View className="px-5 pt-16 pb-12">
+      <View className="px-5 pb-12" style={{ paddingTop: Math.max(insets.top, 16) }}>
         {/* Header */}
         <View className="flex-row justify-between items-center mb-6">
-          <View>
-            <Text className="text-blue-500 text-xs font-bold uppercase tracking-widest mb-0.5">
+          <View className="flex-1 mr-3 min-w-0">
+            <Text className="text-blue-500 text-xs font-bold uppercase tracking-wider mb-0.5" numberOfLines={1}>
               Weight Lifting Tracker
             </Text>
             <Text className="text-slate-400 text-sm">Welcome back,</Text>
-            <Text className="text-white text-2xl font-extrabold">{displayName}</Text>
+            <Text className="text-white text-2xl font-extrabold" numberOfLines={1}>{displayName}</Text>
           </View>
           <TouchableOpacity
             onPress={() => router.push('/settings')}
-            className="w-11 h-11 bg-slate-900/90 rounded-full items-center justify-center border border-slate-800 shadow-sm"
+            className="w-11 h-11 bg-slate-900/90 rounded-full items-center justify-center border border-slate-800 shadow-sm shrink-0"
           >
             <Settings color="#94a3b8" size={20} />
           </TouchableOpacity>

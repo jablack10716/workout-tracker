@@ -1,11 +1,13 @@
 import { View, Text, FlatList, TouchableOpacity, ActivityIndicator, TextInput } from 'react-native';
 import { Plus, ChevronRight, Search, X } from 'lucide-react-native';
 import { useRouter, useFocusEffect } from 'expo-router';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useExercises, Exercise } from '../../src/hooks/useExercises';
 import { useCallback, useState, useMemo } from 'react';
 
 export default function ExercisesScreen() {
   const router = useRouter();
+  const insets = useSafeAreaInsets();
   const { exercises, loading, refetch } = useExercises();
   const [searchQuery, setSearchQuery] = useState('');
 
@@ -64,18 +66,18 @@ export default function ExercisesScreen() {
   };
 
   return (
-    <View className="flex-1 bg-slate-900 p-4">
+    <View className="flex-1 bg-slate-900 px-4 pb-4" style={{ paddingTop: Math.max(insets.top, 16) }}>
       {/* Screen Header */}
-      <View className="flex-row justify-between items-center mb-4 mt-10">
-        <View>
-          <Text className="text-blue-500 text-xs font-bold uppercase tracking-widest mb-0.5">
+      <View className="flex-row justify-between items-center mb-4">
+        <View className="flex-1 mr-3 min-w-0">
+          <Text className="text-blue-500 text-xs font-bold uppercase tracking-wider mb-0.5" numberOfLines={1}>
             Best Damn Weight Lifting Tracker Ever
           </Text>
           <Text className="text-2xl font-bold text-white">Exercise Library</Text>
         </View>
         <TouchableOpacity 
           onPress={() => router.push('/exercises/new')}
-          className="bg-blue-600 p-2.5 rounded-full"
+          className="bg-blue-600 p-2.5 rounded-full shrink-0 shadow-md"
         >
           <Plus color="white" size={22} />
         </TouchableOpacity>

@@ -1,11 +1,13 @@
 import { useState, useEffect } from 'react';
 import { View, Text, TextInput, TouchableOpacity, ScrollView, Alert, ActivityIndicator } from 'react-native';
 import { useRouter } from 'expo-router';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { supabase } from '../src/lib/supabase';
 import { X, User, Bell, LogOut, Check, Database } from 'lucide-react-native';
 
 export default function SettingsScreen() {
   const router = useRouter();
+  const insets = useSafeAreaInsets();
   const [email, setEmail] = useState('');
   const [displayName, setDisplayName] = useState('');
   const [defaultTimer, setDefaultTimer] = useState(90);
@@ -26,9 +28,10 @@ export default function SettingsScreen() {
   async function handleSaveProfile() {
     setLoading(true);
     const { error } = await supabase.auth.updateUser({
-      data: { display_name: displayName }
+      data: { display_name: displayName },
     });
     setLoading(false);
+
     if (error) {
       Alert.alert('Error', error.message);
     } else {
@@ -43,18 +46,18 @@ export default function SettingsScreen() {
   }
 
   return (
-    <View className="flex-1 bg-slate-950 p-6 pt-12">
+    <View className="flex-1 bg-slate-950 p-6" style={{ paddingTop: Math.max(insets.top, 16) }}>
       {/* Modal Header */}
       <View className="flex-row justify-between items-center mb-8 border-b border-slate-800 pb-4">
-        <View>
-          <Text className="text-blue-500 text-xs font-bold uppercase tracking-widest mb-0.5">
+        <View className="flex-1 mr-3 min-w-0">
+          <Text className="text-blue-500 text-xs font-bold uppercase tracking-wider mb-0.5" numberOfLines={1}>
             Best Damn Weight Lifting Tracker Ever
           </Text>
           <Text className="text-white text-2xl font-bold">Settings</Text>
         </View>
         <TouchableOpacity 
           onPress={() => router.back()} 
-          className="w-10 h-10 bg-slate-800/80 rounded-full items-center justify-center"
+          className="w-10 h-10 bg-slate-800/80 rounded-full items-center justify-center shrink-0"
         >
           <X color="#94a3b8" size={20} />
         </TouchableOpacity>

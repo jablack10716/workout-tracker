@@ -1,11 +1,13 @@
 import { View, Text, FlatList, TouchableOpacity, ActivityIndicator } from 'react-native';
 import { Plus, ChevronRight, CalendarRange, CheckCircle } from 'lucide-react-native';
 import { useRouter, useFocusEffect } from 'expo-router';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { supabase } from '../../src/lib/supabase';
 import { useState, useCallback } from 'react';
 
 export default function RoutinesScreen() {
   const router = useRouter();
+  const insets = useSafeAreaInsets();
   const [routines, setRoutines] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -52,21 +54,21 @@ export default function RoutinesScreen() {
     return (
       <View className={`p-5 rounded-2xl mb-4 border ${isActive ? 'bg-indigo-950/40 border-indigo-500/40' : 'bg-slate-900 border-slate-800'}`}>
         <View className="flex-row justify-between items-start mb-3">
-          <View>
+          <View className="flex-1 mr-2 min-w-0">
             <Text className="text-white font-bold text-xl mb-1">{item.name}</Text>
             <Text className="text-slate-400 text-sm">
               {dayCount} Split Days • {item.cycles_per_routine} Cycles
             </Text>
           </View>
           {isActive ? (
-            <View className="bg-emerald-500/20 px-3 py-1 rounded-full border border-emerald-500/30 flex-row items-center">
+            <View className="bg-emerald-500/20 px-3 py-1 rounded-full border border-emerald-500/30 flex-row items-center shrink-0">
               <CheckCircle color="#34d399" size={14} className="mr-1" />
               <Text className="text-emerald-300 text-xs font-bold">Active</Text>
             </View>
           ) : (
             <TouchableOpacity 
               onPress={() => handleMakeActive(item.id)}
-              className="bg-slate-800 px-3 py-1.5 rounded-xl border border-slate-700"
+              className="bg-slate-800 px-3 py-1.5 rounded-xl border border-slate-700 shrink-0"
             >
               <Text className="text-indigo-300 text-xs font-semibold">Make Active</Text>
             </TouchableOpacity>
@@ -90,21 +92,21 @@ export default function RoutinesScreen() {
   };
 
   return (
-    <View className="flex-1 bg-slate-950 p-4">
+    <View className="flex-1 bg-slate-950 px-4 pb-4" style={{ paddingTop: Math.max(insets.top, 16) }}>
       {/* Screen Header */}
-      <View className="flex-row justify-between items-center mb-6 mt-10 px-2">
-        <View>
-          <Text className="text-blue-500 text-xs font-bold uppercase tracking-widest mb-0.5">
+      <View className="flex-row justify-between items-center mb-6 px-1">
+        <View className="flex-1 mr-3 min-w-0">
+          <Text className="text-blue-500 text-xs font-bold uppercase tracking-wider mb-0.5" numberOfLines={1}>
             Best Damn Weight Lifting Tracker Ever
           </Text>
           <Text className="text-2xl font-bold text-white">Routines & Splits</Text>
         </View>
         <TouchableOpacity 
           onPress={() => router.push('/routine-builder/new')}
-          className="bg-blue-600 px-4 py-2.5 rounded-full flex-row items-center"
+          className="bg-blue-600 px-3.5 py-2.5 rounded-full flex-row items-center shrink-0 shadow-md"
         >
-          <Plus color="white" size={18} className="mr-1" />
-          <Text className="text-white font-bold text-sm">Create Routine</Text>
+          <Plus color="white" size={16} className="mr-1.5" />
+          <Text className="text-white font-bold text-xs sm:text-sm">Create Routine</Text>
         </TouchableOpacity>
       </View>
 

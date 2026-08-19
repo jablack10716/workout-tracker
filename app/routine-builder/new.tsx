@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import { View, Text, TextInput, TouchableOpacity, ScrollView, Alert, ActivityIndicator, Modal } from 'react-native';
 import { useRouter } from 'expo-router';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { supabase } from '../../src/lib/supabase';
 import { X, Plus, Trash2, ChevronRight, Check, Sparkles, AlertCircle, Dumbbell, Search, Layers, Link2, Unlink } from 'lucide-react-native';
 
@@ -77,6 +78,7 @@ type DaySplit = {
 
 export default function RoutineBuilderScreen() {
   const router = useRouter();
+  const insets = useSafeAreaInsets();
   const [step, setStep] = useState<1 | 2 | 3>(1); // 1: Setup, 2: Assign, 3: Volumetric Sandbox Review
   const [loading, setLoading] = useState(false);
   
@@ -507,21 +509,21 @@ export default function RoutineBuilderScreen() {
   };
 
   return (
-    <View className="flex-1 bg-slate-950 p-6 pt-12">
+    <View className="flex-1 bg-slate-950 p-6" style={{ paddingTop: Math.max(insets.top, 16) }}>
       {/* Header & Step Wizard Bar */}
       <View className="flex-row justify-between items-center mb-6">
-        <View>
-          <Text className="text-blue-500 text-xs font-bold uppercase tracking-widest mb-0.5">
+        <View className="flex-1 mr-3 min-w-0">
+          <Text className="text-blue-500 text-xs font-bold uppercase tracking-wider mb-0.5" numberOfLines={1}>
             Best Damn Weight Lifting Tracker Ever
           </Text>
           <Text className="text-slate-400 text-xs font-semibold uppercase tracking-wider">
             Step {step} of 3 • Sandbox Mode
           </Text>
-          <Text className="text-white text-2xl font-bold">
+          <Text className="text-white text-2xl font-bold" numberOfLines={1}>
             {step === 1 ? 'Split Setup' : step === 2 ? 'Assign Exercises' : 'Volumetric Review'}
           </Text>
         </View>
-        <TouchableOpacity onPress={() => router.back()} className="w-10 h-10 bg-slate-800 rounded-full items-center justify-center">
+        <TouchableOpacity onPress={() => router.back()} className="w-10 h-10 bg-slate-800 rounded-full items-center justify-center shrink-0">
           <X color="#94a3b8" size={20} />
         </TouchableOpacity>
       </View>

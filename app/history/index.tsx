@@ -1,15 +1,17 @@
 import { useState, useEffect, useCallback } from 'react';
 import { View, Text, ScrollView, TouchableOpacity, ActivityIndicator, FlatList } from 'react-native';
 import { useRouter, useFocusEffect } from 'expo-router';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { supabase } from '../../src/lib/supabase';
 import { Calendar, ChevronRight, Activity, Clock, Flame, Dumbbell, Award, BarChart2 } from 'lucide-react-native';
 
 export default function HistoryScreen() {
   const router = useRouter();
+  const insets = useSafeAreaInsets();
   const [sessions, setSessions] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedMonth, setSelectedMonth] = useState(new Date().getMonth());
-  const [selectedYear] = useState(new Date().getFullYear());
+  const [selectedYear, setSelectedYear] = useState(new Date().getFullYear());
 
   const fetchHistory = useCallback(async () => {
     setLoading(true);
@@ -113,18 +115,18 @@ export default function HistoryScreen() {
   };
 
   return (
-    <View className="flex-1 bg-slate-950 p-4">
+    <View className="flex-1 bg-slate-950 px-4 pb-4" style={{ paddingTop: Math.max(insets.top, 16) }}>
       {/* Header */}
-      <View className="flex-row justify-between items-center mb-6 mt-10 px-2">
-        <View>
-          <Text className="text-blue-500 text-xs font-bold uppercase tracking-widest mb-0.5">
+      <View className="flex-row justify-between items-center mb-6 px-1">
+        <View className="flex-1 mr-3 min-w-0">
+          <Text className="text-blue-500 text-xs font-bold uppercase tracking-wider mb-0.5" numberOfLines={1}>
             Best Damn Weight Lifting Tracker Ever
           </Text>
           <Text className="text-2xl font-bold text-white">Workout History</Text>
         </View>
         <TouchableOpacity 
           onPress={() => router.push('/analytics')}
-          className="bg-purple-600/30 border border-purple-500/40 px-3.5 py-2 rounded-full flex-row items-center"
+          className="bg-purple-600/30 border border-purple-500/40 px-3.5 py-2 rounded-full flex-row items-center shrink-0"
         >
           <BarChart2 color="#c084fc" size={16} className="mr-1.5" />
           <Text className="text-purple-300 font-bold text-xs">Analytics</Text>

@@ -1,12 +1,14 @@
 import { useState, useEffect } from 'react';
 import { View, Text, ScrollView, TouchableOpacity, ActivityIndicator } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { supabase } from '../../src/lib/supabase';
 import { ChevronLeft, Dumbbell, Flame, Clock, Calendar, Sparkles, Layers } from 'lucide-react-native';
 
 export default function SessionDetailScreen() {
   const { id } = useLocalSearchParams();
   const router = useRouter();
+  const insets = useSafeAreaInsets();
   const [session, setSession] = useState<any>(null);
   const [loading, setLoading] = useState(true);
 
@@ -73,18 +75,18 @@ export default function SessionDetailScreen() {
   const mins = Math.max(Math.round(durationSecs / 60), 1);
 
   return (
-    <View className="flex-1 bg-slate-950 p-4 pt-12">
+    <View className="flex-1 bg-slate-950 px-4 pb-4" style={{ paddingTop: Math.max(insets.top, 16) }}>
       {/* Navigation Header */}
       <View className="flex-row items-center mb-6">
-        <TouchableOpacity onPress={() => router.back()} className="p-2 bg-slate-900 rounded-full mr-3 border border-slate-800">
+        <TouchableOpacity onPress={() => router.back()} className="p-2 bg-slate-900 rounded-full mr-3 border border-slate-800 shrink-0">
           <ChevronLeft color="#94a3b8" size={20} />
         </TouchableOpacity>
-        <View>
-          <Text className="text-blue-500 text-xs font-bold uppercase tracking-widest mb-0.5">
+        <View className="flex-1 min-w-0">
+          <Text className="text-blue-500 text-xs font-bold uppercase tracking-wider mb-0.5" numberOfLines={1}>
             Best Damn Weight Lifting Tracker Ever
           </Text>
-          <Text className="text-slate-400 text-xs font-semibold uppercase">{session.routines?.name || 'Workout'}</Text>
-          <Text className="text-white text-xl font-bold">{dateStr}</Text>
+          <Text className="text-slate-400 text-xs font-semibold uppercase" numberOfLines={1}>{session.routines?.name || 'Workout'}</Text>
+          <Text className="text-white text-xl font-bold" numberOfLines={1}>{dateStr}</Text>
         </View>
       </View>
 
