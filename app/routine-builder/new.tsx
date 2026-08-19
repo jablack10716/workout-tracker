@@ -551,7 +551,7 @@ export default function RoutineBuilderScreen() {
   };
 
   return (
-    <View className="flex-1 bg-slate-950 p-6" style={{ paddingTop: Math.max(insets.top, 16) }}>
+    <View className="flex-1 bg-slate-950 px-4 pb-4" style={{ paddingTop: Math.max(insets.top, 16) }}>
       {/* Header & Step Wizard Bar */}
       <View className="flex-row justify-between items-center mb-6">
         <View className="flex-1 mr-3 min-w-0">
@@ -662,9 +662,9 @@ export default function RoutineBuilderScreen() {
 
           {/* Active Day Exercise List */}
           <ScrollView className="flex-1">
-            <View className="flex-row justify-between items-center mb-4">
+            <View className="mb-4">
               <TextInput
-                className="text-white font-bold text-xl bg-slate-900/80 px-3.5 py-2.5 rounded-xl flex-1 border border-slate-800"
+                className="text-white font-bold text-lg bg-slate-900/90 px-4 py-2.5 rounded-xl border border-slate-800 mb-2.5"
                 value={days[activeDayIndex]?.name}
                 placeholder="Day Name"
                 placeholderTextColor="#64748b"
@@ -676,24 +676,24 @@ export default function RoutineBuilderScreen() {
                   });
                 }}
               />
-              <View className="flex-row items-center gap-1.5 ml-2">
-                <TouchableOpacity
-                  onPress={handleStartAddSuperset}
-                  className="bg-indigo-600/30 border border-indigo-500/50 px-2.5 py-2 rounded-xl flex-row items-center"
-                >
-                  <Layers color="#a78bfa" size={14} className="mr-1" />
-                  <Text className="text-indigo-300 font-bold text-xs">+ Superset</Text>
-                </TouchableOpacity>
-
+              <View className="flex-row gap-2">
                 <TouchableOpacity
                   onPress={() => {
                     setTargetSupersetIdForPicker(null);
                     setPickerVisible(true);
                   }}
-                  className="bg-blue-600/30 border border-blue-500/50 px-2.5 py-2 rounded-xl flex-row items-center"
+                  className="flex-1 bg-blue-600/30 border border-blue-500/50 py-2.5 px-3 rounded-xl flex-row items-center justify-center"
                 >
-                  <Plus color="#60a5fa" size={14} className="mr-1" />
-                  <Text className="text-blue-300 font-bold text-xs">+ Exercise</Text>
+                  <Plus color="#60a5fa" size={16} className="mr-1.5" />
+                  <Text className="text-blue-300 font-bold text-xs sm:text-sm">+ Exercise</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  onPress={handleStartAddSuperset}
+                  className="flex-1 bg-indigo-600/30 border border-indigo-500/50 py-2.5 px-3 rounded-xl flex-row items-center justify-center"
+                >
+                  <Layers color="#a78bfa" size={16} className="mr-1.5" />
+                  <Text className="text-indigo-300 font-bold text-xs sm:text-sm">+ Superset</Text>
                 </TouchableOpacity>
               </View>
             </View>
