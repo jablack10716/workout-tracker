@@ -95,6 +95,48 @@ export default function RoutineBuilderScreen() {
   ]);
   const [activeDayIndex, setActiveDayIndex] = useState(0);
 
+  const handleDaysInSplitChange = (newCount: number) => {
+    setDaysInSplit(newCount);
+    setDays((prevDays) => {
+      if (newCount === prevDays.length) return prevDays;
+      if (newCount > prevDays.length) {
+        const updated = [...prevDays];
+        for (let i = prevDays.length; i < newCount; i++) {
+          updated.push({
+            day_number: i + 1,
+            name: `Day ${i + 1}`,
+            exercises: [],
+          });
+        }
+        return updated;
+      } else {
+        return prevDays.slice(0, newCount);
+      }
+    });
+    setActiveDayIndex((prev) => (prev >= newCount ? newCount - 1 : prev));
+  };
+
+  const handleGoToStep2 = () => {
+    setDays((prevDays) => {
+      if (daysInSplit === prevDays.length) return prevDays;
+      if (daysInSplit > prevDays.length) {
+        const updated = [...prevDays];
+        for (let i = prevDays.length; i < daysInSplit; i++) {
+          updated.push({
+            day_number: i + 1,
+            name: `Day ${i + 1}`,
+            exercises: [],
+          });
+        }
+        return updated;
+      } else {
+        return prevDays.slice(0, daysInSplit);
+      }
+    });
+    setActiveDayIndex((prev) => (prev >= daysInSplit ? daysInSplit - 1 : prev));
+    setStep(2);
+  };
+
   // Exercise Picker Modal State
   const [pickerVisible, setPickerVisible] = useState(false);
   const [targetSupersetIdForPicker, setTargetSupersetIdForPicker] = useState<string | null>(null);
@@ -556,7 +598,7 @@ export default function RoutineBuilderScreen() {
               {[3, 4, 5, 6, 7].map((num) => (
                 <TouchableOpacity
                   key={num}
-                  onPress={() => setDaysInSplit(num)}
+                  onPress={() => handleDaysInSplitChange(num)}
                   className={`w-12 h-12 rounded-xl items-center justify-center border ${
                     daysInSplit === num ? 'bg-blue-600 border-blue-400' : 'bg-slate-800 border-slate-700'
                   }`}
@@ -586,10 +628,8 @@ export default function RoutineBuilderScreen() {
             </View>
           </View>
 
-
-
           <TouchableOpacity
-            onPress={() => setStep(2)}
+            onPress={handleGoToStep2}
             className="bg-blue-600 p-4 rounded-2xl flex-row items-center justify-center mb-10"
           >
             <Text className="text-white font-bold text-lg mr-2">Next: Assign Exercises</Text>
