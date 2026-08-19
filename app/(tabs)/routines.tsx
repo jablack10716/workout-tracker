@@ -1,5 +1,5 @@
-import { View, Text, FlatList, TouchableOpacity, ActivityIndicator } from 'react-native';
-import { Plus, ChevronRight, CalendarRange, CheckCircle } from 'lucide-react-native';
+import { View, Text, FlatList, TouchableOpacity, ActivityIndicator, Alert } from 'react-native';
+import { Plus, ChevronRight, CalendarRange, CheckCircle, Trash2 } from 'lucide-react-native';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { supabase } from '../../src/lib/supabase';
@@ -47,6 +47,32 @@ export default function RoutinesScreen() {
     fetchRoutines();
   };
 
+  const handleDeleteRoutine = (routineId: string, routineName: string) => {
+    Alert.alert(
+      'Delete Routine',
+      `Are you sure you want to delete "${routineName}"? All split days and assigned exercises within this routine will also be removed.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            setLoading(true);
+            const { error } = await supabase
+              .from('routines')
+              .delete()
+              .eq('id', routineId);
+
+            if (error) {
+              Alert.alert('Error', error.message || 'Failed to delete routine');
+            }
+            fetchRoutines();
+          },
+        },
+      ]
+    );
+  };
+
   const renderItem = ({ item }: { item: any }) => {
     const isActive = item.status === 'active';
     const dayCount = item.routine_days?.length || item.days_in_split;
@@ -75,17 +101,27 @@ export default function RoutinesScreen() {
           )}
         </View>
 
-        <View className="flex-row justify-between items-center pt-2 border-t border-slate-800/80 mt-2">
+        <View className="flex-row justify-between items-center pt-2.5 border-t border-slate-800/80 mt-2">
           <Text className="text-slate-400 text-xs">
             Current Day: {item.current_day} of {item.days_in_split}
           </Text>
-          <TouchableOpacity 
-            onPress={() => router.push('/routine-builder/new')}
-            className="flex-row items-center"
-          >
-            <Text className="text-indigo-400 text-xs font-semibold mr-1">Edit Split</Text>
-            <ChevronRight color="#818cf8" size={14} />
-          </TouchableOpacity>
+          <View className="flex-row items-center gap-3">
+            <TouchableOpacity 
+              onPress={() => router.push('/routine-builder/new')}
+              className="flex-row items-center"
+            >
+              <Text className="text-indigo-400 text-xs font-semibold mr-1">Edit Split</Text>
+              <ChevronRight color="#818cf8" size={14} />
+            </TouchableOpacity>
+
+            <TouchableOpacity 
+              onPress={() => handleDeleteRoutine(item.id, item.name)}
+              className="flex-row items-center bg-rose-500/10 px-2.5 py-1 rounded-lg border border-rose-500/20"
+            >
+              <Trash2 color="#f87171" size={13} className="mr-1" />
+              <Text className="text-rose-300 text-xs font-semibold">Delete</Text>
+            </TouchableOpacity>
+          </View>
         </View>
       </View>
     );
