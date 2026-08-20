@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from 'react';
-import { View, Text, TextInput, TouchableOpacity, ScrollView, Alert, ActivityIndicator, Modal } from 'react-native';
+import { View, Text, TextInput, TouchableOpacity, ScrollView, Alert, ActivityIndicator, Modal, Platform } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { supabase } from '../../src/lib/supabase';
@@ -466,25 +466,31 @@ export default function RoutineBuilderScreen() {
   // Save Routine to Supabase
   const handleCommitRoutine = async (shouldActivate: boolean) => {
     setLoading(true);
-    const { data: { session } } = await supabase.auth.getSession();
-    const userId = session?.user?.id;
-
-    if (!userId) {
-      Alert.alert('Error', 'You must be logged in to create a routine.');
-      setLoading(false);
-      return;
-    }
-
     try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const userId = session?.user?.id;
+
+      if (!userId) {
+        setLoading(false);
+        const msg = 'You must be logged in to create a routine.';
+        if (Platform.OS === 'web') window.alert(msg);
+        else Alert.alert('Error', msg);
+        return;
+      }
+
+      const cleanDaysInSplit = Math.max(3, Math.min(7, Number(daysInSplit) || 3));
+      const cleanCycles = Math.max(1, Number(cyclesPerRoutine) || 3);
+      const cleanName = routineName.trim() || 'My Custom Split';
+
       // 1. Insert Routine
       const { data: routineData, error: routineErr } = await supabase
         .from('routines')
         .insert([{
           user_id: userId,
-          name: routineName.trim(),
+          name: cleanName,
           status: shouldActivate ? 'active' : 'draft',
-          days_in_split: daysInSplit,
-          cycles_per_routine: cyclesPerRoutine,
+          days_in_split: cleanDaysInSplit,
+          cycles_per_routine: cleanCycles,
           current_day: 1,
           current_cycle: 1,
           updated_at: new Date().toISOString()
@@ -500,42 +506,66 @@ export default function RoutineBuilderScreen() {
 
       // If set to active, deactivate other routines for this user
       if (shouldActivate) {
-        await supabase
+        const { error: deactErr } = await supabase
           .from('routines')
           .update({ status: 'draft' })
           .eq('user_id', userId)
           .neq('id', routineId);
+        if (deactErr) console.warn('Could not deactivate other routines:', deactErr);
+      }
+
+      // Ensure days array has exactly cleanDaysInSplit elements
+      const finalDays: DaySplit[] = [...days.slice(0, cleanDaysInSplit)];
+      while (finalDays.length < cleanDaysInSplit) {
+        finalDays.push({
+          day_number: finalDays.length + 1,
+          name: `Day ${finalDays.length + 1}`,
+          exercises: [],
+        });
       }
 
       // 2. Insert Routine Days & Exercises
-      for (const d of days) {
+      for (let i = 0; i < finalDays.length; i++) {
+        const d = finalDays[i];
+        const dayNumber = i + 1;
+
         const { data: dayData, error: dayErr } = await supabase
           .from('routine_days')
           .insert([{
             routine_id: routineId,
-            day_number: d.day_number,
+            day_number: dayNumber,
           }])
           .select()
           .single();
 
-        if (dayErr || !dayData) throw dayErr;
+        if (dayErr || !dayData) {
+          throw dayErr || new Error(`Failed to create routine day ${dayNumber}`);
+        }
 
         const dayId = dayData.id;
 
         // Insert Exercises for this day
-        if (d.exercises.length > 0) {
-          const exerciseRows = d.exercises.map((ex, idx) => ({
-            routine_day_id: dayId,
-            exercise_id: ex.exercise_id,
-            order_index: idx + 1,
-            planned_sets: Number(ex.planned_sets) || 3,
-            target_reps: Number(ex.target_reps) || 10,
-            target_weight: ex.is_bodyweight_only || ex.target_weight === null || ex.target_weight === ''
-              ? null
-              : Number(ex.target_weight),
-            superset_id: ex.superset_id || null,
-            superset_order: ex.superset_order || 1
-          }));
+        if (d.exercises && d.exercises.length > 0) {
+          const exerciseRows = d.exercises.map((ex, idx) => {
+            const rawSets = parseInt(String(ex.planned_sets), 10);
+            const rawReps = parseInt(String(ex.target_reps), 10);
+            const rawWeight = ex.target_weight;
+            const parsedWeight =
+              rawWeight !== null && rawWeight !== undefined && rawWeight !== '' && !isNaN(Number(rawWeight))
+                ? Number(rawWeight)
+                : null;
+
+            return {
+              routine_day_id: dayId,
+              exercise_id: ex.exercise_id,
+              order_index: idx + 1,
+              planned_sets: isNaN(rawSets) || rawSets < 1 ? 3 : rawSets,
+              target_reps: isNaN(rawReps) || rawReps < 1 ? 10 : rawReps,
+              target_weight: ex.is_bodyweight_only ? null : parsedWeight,
+              superset_id: ex.superset_id || null,
+              superset_order: Number(ex.superset_order) || 1,
+            };
+          });
 
           const { error: exErr } = await supabase.from('routine_exercises').insert(exerciseRows);
           if (exErr) throw exErr;
@@ -545,8 +575,14 @@ export default function RoutineBuilderScreen() {
       setLoading(false);
       router.replace('/(tabs)/routines');
     } catch (err: any) {
+      console.error('Save routine error:', err);
       setLoading(false);
-      Alert.alert('Save Error', err.message || 'Failed to save routine');
+      const errMsg = err?.message || 'Failed to save routine';
+      if (Platform.OS === 'web') {
+        window.alert(`Save Error: ${errMsg}`);
+      } else {
+        Alert.alert('Save Error', errMsg);
+      }
     }
   };
 
