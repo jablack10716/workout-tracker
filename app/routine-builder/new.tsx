@@ -568,7 +568,16 @@ export default function RoutineBuilderScreen() {
           });
 
           const { error: exErr } = await supabase.from('routine_exercises').insert(exerciseRows);
-          if (exErr) throw exErr;
+          if (exErr) {
+            // Fallback: If superset_id column does not exist on remote schema cache, retry without superset columns
+            if (exErr.message?.includes('superset_id') || exErr.details?.includes('superset_id') || exErr.message?.includes('schema cache')) {
+              const fallbackRows = exerciseRows.map(({ superset_id, superset_order, ...rest }) => rest);
+              const { error: fallbackErr } = await supabase.from('routine_exercises').insert(fallbackRows);
+              if (fallbackErr) throw fallbackErr;
+            } else {
+              throw exErr;
+            }
+          }
         }
       }
 

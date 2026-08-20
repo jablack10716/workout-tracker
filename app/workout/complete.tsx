@@ -93,6 +93,7 @@ export default function WorkoutCompleteScreen() {
 
       // 2. Insert Session Exercises & Sets
       for (const ex of workoutPayload) {
+        let seDataFinal: any = null;
         const { data: seData, error: seErr } = await supabase
           .from('session_exercises')
           .insert([{
@@ -105,9 +106,28 @@ export default function WorkoutCompleteScreen() {
           .select()
           .single();
 
-        if (seErr || !seData) continue;
+        if (seErr) {
+          if (seErr.message?.includes('superset_id') || seErr.details?.includes('superset_id') || seErr.message?.includes('schema cache')) {
+            const { data: fallbackSeData, error: fallbackSeErr } = await supabase
+              .from('session_exercises')
+              .insert([{
+                session_id: sessionId,
+                exercise_id: ex.exercise_id,
+                next_target_weight: ex.is_bodyweight_only ? null : parseFloat(ex.next_target_weight) || null,
+              }])
+              .select()
+              .single();
+            if (!fallbackSeErr && fallbackSeData) {
+              seDataFinal = fallbackSeData;
+            }
+          }
+        } else if (seData) {
+          seDataFinal = seData;
+        }
 
-        const seId = seData.id;
+        if (!seDataFinal) continue;
+
+        const seId = seDataFinal.id;
 
         const setRows = (ex.sets || []).map((s: any) => ({
           session_exercise_id: seId,
