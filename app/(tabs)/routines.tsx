@@ -1,4 +1,4 @@
-import { View, Text, FlatList, TouchableOpacity, ActivityIndicator, Alert } from 'react-native';
+import { View, Text, FlatList, TouchableOpacity, ActivityIndicator, Alert, Modal, Platform } from 'react-native';
 import { Plus, ChevronRight, CalendarRange, CheckCircle, Trash2 } from 'lucide-react-native';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -10,6 +10,8 @@ export default function RoutinesScreen() {
   const insets = useSafeAreaInsets();
   const [routines, setRoutines] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [routineToDelete, setRoutineToDelete] = useState<{ id: string; name: string } | null>(null);
+  const [deleting, setDeleting] = useState(false);
 
   const fetchRoutines = useCallback(async () => {
     setLoading(true);
@@ -47,30 +49,33 @@ export default function RoutinesScreen() {
     fetchRoutines();
   };
 
-  const handleDeleteRoutine = (routineId: string, routineName: string) => {
-    Alert.alert(
-      'Delete Routine',
-      `Are you sure you want to delete "${routineName}"? All split days and assigned exercises within this routine will also be removed.`,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Delete',
-          style: 'destructive',
-          onPress: async () => {
-            setLoading(true);
-            const { error } = await supabase
-              .from('routines')
-              .delete()
-              .eq('id', routineId);
+  const confirmDeleteRoutine = async () => {
+    if (!routineToDelete) return;
+    try {
+      setDeleting(true);
+      const { error } = await supabase
+        .from('routines')
+        .delete()
+        .eq('id', routineToDelete.id);
 
-            if (error) {
-              Alert.alert('Error', error.message || 'Failed to delete routine');
-            }
-            fetchRoutines();
-          },
-        },
-      ]
-    );
+      if (error) {
+        if (Platform.OS === 'web') {
+          window.alert(error.message || 'Failed to delete routine');
+        } else {
+          Alert.alert('Error', error.message || 'Failed to delete routine');
+        }
+      }
+      setRoutineToDelete(null);
+      await fetchRoutines();
+    } catch (err: any) {
+      if (Platform.OS === 'web') {
+        window.alert(err.message || 'Failed to delete routine');
+      } else {
+        Alert.alert('Error', err.message || 'Failed to delete routine');
+      }
+    } finally {
+      setDeleting(false);
+    }
   };
 
   const renderItem = ({ item }: { item: any }) => {
@@ -115,10 +120,12 @@ export default function RoutinesScreen() {
             </TouchableOpacity>
 
             <TouchableOpacity 
-              onPress={() => handleDeleteRoutine(item.id, item.name)}
-              className="flex-row items-center bg-rose-500/10 px-2.5 py-1 rounded-lg border border-rose-500/20"
+              onPress={() => setRoutineToDelete({ id: item.id, name: item.name })}
+              hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+              activeOpacity={0.7}
+              className="flex-row items-center bg-rose-500/10 px-3 py-1.5 rounded-lg border border-rose-500/20"
             >
-              <Trash2 color="#f87171" size={13} className="mr-1" />
+              <Trash2 color="#f87171" size={13} className="mr-1.5" />
               <Text className="text-rose-300 text-xs font-semibold">Delete</Text>
             </TouchableOpacity>
           </View>
@@ -175,6 +182,50 @@ export default function RoutinesScreen() {
           contentContainerStyle={{ paddingBottom: 20 }}
         />
       )}
+
+      {/* Delete Confirmation Modal */}
+      <Modal
+        visible={routineToDelete !== null}
+        transparent
+        animationType="fade"
+        onRequestClose={() => {
+          if (!deleting) setRoutineToDelete(null);
+        }}
+      >
+        <View className="flex-1 bg-black/75 justify-center items-center px-6">
+          <View className="bg-slate-900 p-6 rounded-3xl border border-slate-800 w-full max-w-sm shadow-2xl">
+            <View className="w-12 h-12 rounded-2xl bg-rose-500/10 border border-rose-500/20 items-center justify-center mb-4">
+              <Trash2 color="#f87171" size={24} />
+            </View>
+            <Text className="text-white text-xl font-bold mb-2">Delete Routine?</Text>
+            <Text className="text-slate-400 text-sm leading-5 mb-6">
+              Are you sure you want to delete <Text className="text-white font-semibold">"{routineToDelete?.name}"</Text>? All split days and assigned exercises within this routine will also be removed.
+            </Text>
+
+            <View className="flex-row gap-3">
+              <TouchableOpacity
+                onPress={() => setRoutineToDelete(null)}
+                disabled={deleting}
+                className="flex-1 bg-slate-800 py-3 rounded-xl items-center border border-slate-700"
+              >
+                <Text className="text-slate-300 font-semibold text-sm">Cancel</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                onPress={confirmDeleteRoutine}
+                disabled={deleting}
+                className="flex-1 bg-rose-600 active:bg-rose-500 py-3 rounded-xl items-center justify-center"
+              >
+                {deleting ? (
+                  <ActivityIndicator color="white" size="small" />
+                ) : (
+                  <Text className="text-white font-bold text-sm">Delete</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
