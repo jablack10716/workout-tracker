@@ -4,7 +4,22 @@ import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { supabase } from '../../src/lib/supabase';
 import { SetRow } from '../../src/components/SetRow';
-import { X, Check, Timer, Plus, FastForward, Dumbbell, Sparkles, ArrowRight, Layers } from 'lucide-react-native';
+import {
+  X,
+  Check,
+  Timer,
+  Plus,
+  FastForward,
+  Dumbbell,
+  Sparkles,
+  ArrowRight,
+  Layers,
+  Flame,
+  Zap,
+  Trophy,
+  Clock,
+} from 'lucide-react-native';
+import { calculateEstimated1RM } from '../../src/utils/analyticsEngine';
 import * as Haptics from 'expo-haptics';
 
 type SetData = {
@@ -458,12 +473,30 @@ export default function ActiveWorkoutScreen() {
     }
   };
 
+  let liveTonnage = 0;
+  let liveCompletedSets = 0;
+  let liveTotalSets = 0;
+
+  workoutExercises.forEach((ex) => {
+    ex.sets.forEach((st) => {
+      liveTotalSets++;
+      if (st.is_completed) {
+        liveCompletedSets++;
+        liveTonnage += (parseFloat(st.weight) || 0) * (parseInt(st.reps, 10) || 0);
+      }
+    });
+  });
+
+  const elapsedSecs = Math.max(Math.round((Date.now() - startTime) / 1000), 1);
+  const elapsedMins = Math.max(Math.round(elapsedSecs / 60), 1);
+  const liveDensity = elapsedMins > 0 ? Math.round(liveTonnage / elapsedMins) : 0;
+
   return (
     <View className="flex-1 bg-slate-950">
       {/* Top Navigation Header */}
       <View 
         style={{ paddingTop: Math.max(insets.top, 16) + 8 }}
-        className="px-6 pb-4 bg-slate-900 border-b border-slate-800 flex-row justify-between items-center"
+        className="px-6 pb-3 bg-slate-900 border-b border-slate-800 flex-row justify-between items-center"
       >
         <View className="flex-1 mr-3">
           <Text className="text-blue-500 text-xs font-bold uppercase tracking-widest mb-0.5">
@@ -482,6 +515,30 @@ export default function ActiveWorkoutScreen() {
         >
           <X color="#94a3b8" size={22} />
         </TouchableOpacity>
+      </View>
+
+      {/* Live Gym-Floor Real-Time Dashboard Bar */}
+      <View className="bg-slate-900/95 px-4 py-2.5 border-b border-slate-800/90 flex-row justify-between items-center">
+        <View className="flex-row items-center">
+          <Flame color="#f97316" size={16} className="mr-1" />
+          <Text className="text-white font-black text-xs">
+            {Math.round(liveTonnage).toLocaleString()} <Text className="text-slate-400 font-normal">lbs</Text>
+          </Text>
+        </View>
+
+        <View className="flex-row items-center">
+          <Dumbbell color="#60a5fa" size={14} className="mr-1" />
+          <Text className="text-white font-black text-xs">
+            {liveCompletedSets}/{liveTotalSets} <Text className="text-slate-400 font-normal">sets</Text>
+          </Text>
+        </View>
+
+        <View className="flex-row items-center">
+          <Zap color="#34d399" size={14} className="mr-1" />
+          <Text className="text-white font-black text-xs">
+            {liveDensity} <Text className="text-slate-400 font-normal">lbs/m</Text>
+          </Text>
+        </View>
       </View>
 
       {/* Main Exercise Set Logger */}
@@ -504,6 +561,14 @@ export default function ActiveWorkoutScreen() {
 
             if (!ex.superset_id) {
               const exIdx = i;
+              let topSetE1RM = 0;
+              ex.sets.forEach((st) => {
+                if (st.is_completed) {
+                  const e1rm = calculateEstimated1RM(parseFloat(st.weight) || 0, parseInt(st.reps, 10) || 0);
+                  if (e1rm > topSetE1RM) topSetE1RM = e1rm;
+                }
+              });
+
               elements.push(
                 <View key={ex.routine_exercise_id || `standalone_${exIdx}`} className="bg-slate-900 p-4 rounded-3xl border border-slate-800 mb-6">
                   <View className="flex-row justify-between items-center mb-3">
@@ -518,6 +583,13 @@ export default function ActiveWorkoutScreen() {
                         </Text>
                       </View>
                     </View>
+                    {topSetE1RM > 0 && !ex.is_bodyweight_only && (
+                      <View className="bg-purple-500/20 px-2 py-0.5 rounded-lg border border-purple-500/30">
+                        <Text className="text-purple-300 text-[10px] font-black">
+                          1RM ~{Math.round(topSetE1RM)}
+                        </Text>
+                      </View>
+                    )}
                   </View>
 
                   {/* Set Table Column Headers */}
@@ -602,6 +674,14 @@ export default function ActiveWorkoutScreen() {
                     const originalExIdx = item.originalIndex;
                     const tag = `${letter}${groupEx.superset_order || subIdx + 1}`;
 
+                    let topSetE1RM = 0;
+                    groupEx.sets.forEach((st) => {
+                      if (st.is_completed) {
+                        const e1rm = calculateEstimated1RM(parseFloat(st.weight) || 0, parseInt(st.reps, 10) || 0);
+                        if (e1rm > topSetE1RM) topSetE1RM = e1rm;
+                      }
+                    });
+
                     return (
                       <View key={groupEx.routine_exercise_id || `sub_${originalExIdx}`} className="bg-slate-900 p-4 rounded-2xl border border-slate-800 mb-4">
                         <View className="flex-row justify-between items-center mb-3">
@@ -616,6 +696,13 @@ export default function ActiveWorkoutScreen() {
                               </Text>
                             </View>
                           </View>
+                          {topSetE1RM > 0 && !groupEx.is_bodyweight_only && (
+                            <View className="bg-purple-500/20 px-2 py-0.5 rounded-lg border border-purple-500/30">
+                              <Text className="text-purple-300 text-[10px] font-black">
+                                1RM ~{Math.round(topSetE1RM)}
+                              </Text>
+                            </View>
+                          )}
                         </View>
 
                         {/* Set Table Column Headers */}

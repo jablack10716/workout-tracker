@@ -21,12 +21,24 @@ import {
   Clock,
   TrendingUp,
   Sparkles,
+  Zap,
+  Award,
 } from 'lucide-react-native';
 import { supabase } from '../../src/lib/supabase';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Circle } from 'react-native-svg';
 import { computeDashboardStats, DashboardStats } from '../../src/utils/dashboardMetrics';
+import {
+  extractPersonalRecords,
+  getWeeklyVolumeHistory,
+  getExerciseE1RMHistory,
+  getMuscleGroupVolumeStatusList,
+  calculateWorkoutStreak,
+  PREntry,
+} from '../../src/utils/analyticsEngine';
+import { getTargetRIR } from '../../src/utils/autoRegEngine';
+import { Sparkline } from '../../src/components/charts/Sparkline';
 
 export default function DashboardScreen() {
   const router = useRouter();
@@ -34,6 +46,7 @@ export default function DashboardScreen() {
   const [displayName, setDisplayName] = useState('');
   const [activeRoutine, setActiveRoutine] = useState<any>(null);
   const [allSessions, setAllSessions] = useState<any[]>([]);
+  const [personalRecords, setPersonalRecords] = useState<PREntry[]>([]);
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -80,9 +93,12 @@ export default function DashboardScreen() {
         const sessionLogs = sessions || [];
         setAllSessions(sessionLogs);
 
-        // 3. Compute Dynamic Dashboard Stats
+        // 3. Compute Dynamic Dashboard Stats & PRs
         const calculatedStats = computeDashboardStats(currentActiveRoutine, sessionLogs);
         setStats(calculatedStats);
+
+        const prs = extractPersonalRecords(sessionLogs);
+        setPersonalRecords(prs);
       }
     } catch (err) {
       console.error('Error loading dashboard data:', err);
@@ -104,6 +120,13 @@ export default function DashboardScreen() {
   };
 
   const recentSessions = allSessions.slice(0, 3);
+  const weeklyHistory = getWeeklyVolumeHistory(allSessions, 6);
+  const weeklyTonnageTrend = weeklyHistory.map((w) => w.totalVolume);
+  const streaks = calculateWorkoutStreak(allSessions);
+
+  // Auto-regulation RIR Target for the active cycle
+  const currentCycleNum = activeRoutine?.current_cycle || 1;
+  const targetRIR = getTargetRIR(currentCycleNum);
 
   // SVG parameters for the main Volume Impact circular ring
   const ringRadius = 38;
@@ -116,9 +139,19 @@ export default function DashboardScreen() {
   const miniCircumference = 2 * Math.PI * miniRadius; // ~87.96
   const miniOffset = miniCircumference - (miniCircumference * completionPct) / 100;
 
+  // Top 3 PR highlights with sparklines
+  const topPRHighlights = personalRecords.slice(0, 3).map((pr) => {
+    const history = getExerciseE1RMHistory(allSessions, pr.exerciseId);
+    return {
+      ...pr,
+      sparklineData: history.length > 1 ? history.map((h) => h.e1rm) : [pr.estimated1RM, pr.estimated1RM],
+    };
+  });
+
   return (
     <ScrollView
       className="flex-1 bg-slate-950"
+      showsVerticalScrollIndicator={false}
       refreshControl={
         <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#60a5fa" />
       }
@@ -128,10 +161,10 @@ export default function DashboardScreen() {
         <View className="flex-row justify-between items-center mb-6">
           <View className="flex-1 mr-3 min-w-0">
             <Text className="text-blue-500 text-xs font-bold uppercase tracking-wider mb-0.5" numberOfLines={1}>
-              Weight Lifting Tracker
+              Exercise Science Workout Tracker
             </Text>
             <Text className="text-slate-400 text-sm">Welcome back,</Text>
-            <Text className="text-white text-2xl font-extrabold" numberOfLines={1}>{displayName}</Text>
+            <Text className="text-white text-2xl font-black" numberOfLines={1}>{displayName}</Text>
           </View>
           <TouchableOpacity
             onPress={() => router.push('/settings')}
@@ -142,70 +175,76 @@ export default function DashboardScreen() {
         </View>
 
         {/* 3-Stat Metric Row */}
-        <View className="flex-row gap-3 mb-6">
-          {/* Workouts */}
-          <View className="flex-1 bg-slate-900/80 p-3.5 rounded-2xl border border-slate-800/90 items-center justify-center shadow-sm">
-            <View className="w-8 h-8 rounded-full bg-blue-500/10 items-center justify-center mb-1 border border-blue-500/20">
-              <Dumbbell color="#60a5fa" size={16} />
+        <View className="flex-row gap-2.5 mb-5">
+          {/* Workouts & Streak */}
+          <View className="flex-1 bg-slate-900/90 p-3 rounded-2xl border border-slate-800/90 items-center justify-center shadow-sm">
+            <View className="w-7 h-7 rounded-full bg-blue-500/10 items-center justify-center mb-1 border border-blue-500/20">
+              <Dumbbell color="#60a5fa" size={14} />
             </View>
-            <Text className="text-white font-black text-xl leading-tight">
+            <Text className="text-white font-black text-lg leading-tight">
               {stats?.weeklyWorkoutsCount ?? 0}
             </Text>
-            <Text className="text-slate-400 text-[10px] font-semibold uppercase tracking-wider mt-0.5">
-              Workouts
+            <Text className="text-slate-400 text-[9px] font-bold uppercase tracking-wider mt-0.5">
+              {streaks.currentStreakWeeks > 0 ? `🔥 ${streaks.currentStreakWeeks}w Streak` : 'Workouts'}
             </Text>
           </View>
 
-          {/* Tonnage */}
-          <View className="flex-1 bg-slate-900/80 p-3.5 rounded-2xl border border-slate-800/90 items-center justify-center shadow-sm">
-            <View className="w-8 h-8 rounded-full bg-orange-500/10 items-center justify-center mb-1 border border-orange-500/20">
-              <Flame color="#f97316" size={16} />
+          {/* Tonnage & Sparkline */}
+          <View className="flex-1 bg-slate-900/90 p-3 rounded-2xl border border-slate-800/90 items-center justify-center shadow-sm">
+            <View className="w-7 h-7 rounded-full bg-orange-500/10 items-center justify-center mb-1 border border-orange-500/20">
+              <Flame color="#f97316" size={14} />
             </View>
-            <Text className="text-white font-black text-xl leading-tight" numberOfLines={1}>
+            <Text className="text-white font-black text-lg leading-tight" numberOfLines={1}>
               {stats && stats.weeklyTonnage > 0
                 ? stats.weeklyTonnage >= 10000
                   ? `${(stats.weeklyTonnage / 1000).toFixed(1)}k`
                   : stats.weeklyTonnage.toLocaleString()
                 : '0'}
             </Text>
-            <Text className="text-slate-400 text-[10px] font-semibold uppercase tracking-wider mt-0.5">
-              Tonnage (lbs)
-            </Text>
+            {weeklyTonnageTrend.length >= 2 ? (
+              <View className="mt-0.5">
+                <Sparkline data={weeklyTonnageTrend} width={50} height={14} color="#f97316" strokeWidth={1.5} />
+              </View>
+            ) : (
+              <Text className="text-slate-400 text-[9px] font-bold uppercase tracking-wider mt-0.5">
+                Tonnage (lbs)
+              </Text>
+            )}
           </View>
 
           {/* Weekly Target % Ring */}
-          <View className="flex-1 bg-slate-900/80 p-3.5 rounded-2xl border border-slate-800/90 items-center justify-center shadow-sm">
-            <View className="relative items-center justify-center mb-1">
-              <Svg width="36" height="36">
+          <View className="flex-1 bg-slate-900/90 p-3 rounded-2xl border border-slate-800/90 items-center justify-center shadow-sm">
+            <View className="relative items-center justify-center mb-0.5">
+              <Svg width="32" height="32">
                 <Circle
-                  cx="18"
-                  cy="18"
+                  cx="16"
+                  cy="16"
                   r={miniRadius}
                   stroke="#334155"
-                  strokeWidth="3.5"
+                  strokeWidth="3"
                   fill="none"
                 />
                 <Circle
-                  cx="18"
-                  cy="18"
+                  cx="16"
+                  cy="16"
                   r={miniRadius}
                   stroke={completionPct >= 100 ? '#10b981' : '#8b5cf6'}
-                  strokeWidth="3.5"
+                  strokeWidth="3"
                   fill="none"
                   strokeDasharray={`${miniCircumference}`}
                   strokeDashoffset={miniOffset}
                   strokeLinecap="round"
-                  transform="rotate(-90 18 18)"
+                  transform="rotate(-90 16 16)"
                 />
               </Svg>
               <View className="absolute">
-                <Text className="text-white font-bold text-[10px]">{completionPct}%</Text>
+                <Text className="text-white font-bold text-[9px]">{completionPct}%</Text>
               </View>
             </View>
-            <Text className="text-slate-300 font-bold text-xs leading-tight">
+            <Text className="text-slate-300 font-bold text-[11px] leading-tight">
               {stats?.weeklyCompletedSets ?? 0}/{stats?.weeklyTargetSets ?? 0}
             </Text>
-            <Text className="text-slate-400 text-[10px] font-semibold uppercase tracking-wider mt-0.5">
+            <Text className="text-slate-400 text-[9px] font-bold uppercase tracking-wider mt-0.5">
               Target Sets
             </Text>
           </View>
@@ -223,13 +262,16 @@ export default function DashboardScreen() {
                 </Text>
               </View>
 
-              <Text className="text-indigo-300 text-xs font-medium">
-                Cycle {activeRoutine.current_cycle} of {activeRoutine.cycles_per_routine}
-              </Text>
+              {/* Mesocycle RIR Target Badge */}
+              <View className="bg-purple-500/20 px-2.5 py-1 rounded-full border border-purple-500/30">
+                <Text className="text-purple-300 text-[10px] font-black uppercase">
+                  Target: {targetRIR} RIR (Cycle {activeRoutine.current_cycle})
+                </Text>
+              </View>
             </View>
 
             {/* Split Day Title */}
-            <Text className="text-white text-2xl font-extrabold mb-1">
+            <Text className="text-white text-2xl font-black mb-0.5">
               {stats?.currentDayName || activeRoutine.name}
             </Text>
             <Text className="text-indigo-200/80 text-xs font-medium mb-4">
@@ -328,6 +370,51 @@ export default function DashboardScreen() {
               <Plus color="white" size={20} className="mr-2" />
               <Text className="text-white font-bold text-base">Create Routine</Text>
             </TouchableOpacity>
+          </View>
+        )}
+
+        {/* KEY LIFTS 1RM PROGRESSION */}
+        {topPRHighlights.length > 0 && (
+          <View className="mb-6">
+            <View className="flex-row justify-between items-center mb-3">
+              <View>
+                <Text className="text-white text-lg font-bold">Key Strength Trends</Text>
+                <Text className="text-slate-400 text-xs">Estimated 1RM milestones</Text>
+              </View>
+              <TouchableOpacity onPress={() => router.push('/analytics')}>
+                <Text className="text-indigo-400 text-xs font-bold">All Analytics</Text>
+              </TouchableOpacity>
+            </View>
+
+            <View className="space-y-2.5">
+              {topPRHighlights.map((lift) => (
+                <TouchableOpacity
+                  key={lift.exerciseId}
+                  onPress={() => router.push('/analytics')}
+                  className="bg-slate-900/80 p-3.5 rounded-2xl border border-slate-800/90 flex-row justify-between items-center"
+                >
+                  <View className="flex-1 mr-2">
+                    <Text className="text-white font-bold text-sm" numberOfLines={1}>
+                      {lift.exerciseName}
+                    </Text>
+                    <Text className="text-slate-400 text-xs">
+                      Max: {lift.maxWeight} lbs × {lift.maxRepsAtMaxWeight}
+                    </Text>
+                  </View>
+
+                  <View className="flex-row items-center gap-3">
+                    {lift.sparklineData.length >= 2 && (
+                      <Sparkline data={lift.sparklineData} width={50} height={20} color="#60a5fa" />
+                    )}
+                    <View className="bg-purple-500/10 px-2.5 py-1 rounded-xl border border-purple-500/30">
+                      <Text className="text-purple-300 font-black text-xs">
+                        ~{Math.round(lift.estimated1RM)} 1RM
+                      </Text>
+                    </View>
+                  </View>
+                </TouchableOpacity>
+              ))}
+            </View>
           </View>
         )}
 
