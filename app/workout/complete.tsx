@@ -192,7 +192,7 @@ export default function WorkoutCompleteScreen() {
       <ScrollView className="flex-1">
         {/* App Branding */}
         <Text className="text-blue-500 text-xs font-bold uppercase tracking-widest text-center mb-2">
-          Best Damn Weight Lifting Tracker Ever
+          Best Damn Workout Tracker Ever
         </Text>
         {/* Top Trophy Banner */}
         <View className="items-center my-6">

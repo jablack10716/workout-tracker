@@ -51,7 +51,7 @@ export default function SettingsScreen() {
       <View className="flex-row justify-between items-center mb-8 border-b border-slate-800 pb-4">
         <View className="flex-1 mr-3 min-w-0">
           <Text className="text-blue-500 text-xs font-bold uppercase tracking-wider mb-0.5" numberOfLines={1}>
-            Best Damn Weight Lifting Tracker Ever
+            Best Damn Workout Tracker Ever
           </Text>
           <Text className="text-white text-2xl font-bold">Settings</Text>
         </View>

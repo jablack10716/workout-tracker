@@ -500,7 +500,7 @@ export default function ActiveWorkoutScreen() {
       >
         <View className="flex-1 mr-3">
           <Text className="text-blue-500 text-xs font-bold uppercase tracking-widest mb-0.5">
-            Best Damn Weight Lifting Tracker Ever
+            Best Damn Workout Tracker Ever
           </Text>
           <Text className="text-slate-400 font-semibold text-xs uppercase tracking-wider">
             {activeRoutine?.name} • Day {activeRoutine?.current_day}

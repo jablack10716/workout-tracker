@@ -181,9 +181,9 @@ export default function ExerciseEditor() {
 
   return (
     <ScrollView className="flex-1 bg-slate-900 p-4">
-      <Text className="text-blue-500 text-xs font-bold uppercase tracking-widest mt-10 mb-0.5">
-        Best Damn Weight Lifting Tracker Ever
-      </Text>
+        <Text className="text-blue-500 text-xs font-bold uppercase tracking-wider mb-0.5" numberOfLines={1}>
+          Best Damn Workout Tracker Ever
+        </Text>
       <Text className="text-2xl font-bold text-white mb-6">
         {isNew ? 'New Exercise' : 'Edit Exercise'}
       </Text>

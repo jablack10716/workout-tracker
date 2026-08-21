@@ -97,7 +97,7 @@ export default function CycleCompareScreen() {
         </TouchableOpacity>
         <View className="flex-1 min-w-0">
           <Text className="text-blue-500 text-xs font-bold uppercase tracking-wider mb-0.5" numberOfLines={1}>
-            Progressive Overload Analytics
+            Best Damn Workout Tracker Ever
           </Text>
           <Text className="text-2xl font-black text-white" numberOfLines={1}>
             Cycle-over-Cycle Comparison

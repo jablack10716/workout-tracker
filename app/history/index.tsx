@@ -201,7 +201,7 @@ export default function HistoryScreen() {
       <View className="flex-row justify-between items-center mb-5 px-1">
         <View className="flex-1 mr-3 min-w-0">
           <Text className="text-blue-500 text-xs font-bold uppercase tracking-wider mb-0.5" numberOfLines={1}>
-            Best Damn Weight Lifting Tracker Ever
+            Best Damn Workout Tracker Ever
           </Text>
           <Text className="text-2xl font-black text-white">Workout History</Text>
         </View>

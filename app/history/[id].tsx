@@ -171,7 +171,7 @@ export default function SessionDetailScreen() {
           </TouchableOpacity>
           <View className="flex-1 min-w-0">
             <Text className="text-blue-500 text-xs font-bold uppercase tracking-wider mb-0.5" numberOfLines={1}>
-              Session Performance Report
+              Best Damn Workout Tracker Ever
             </Text>
             <Text className="text-white text-xl font-extrabold" numberOfLines={1}>
               {session.routines?.name || 'Workout'} • Cycle {session.cycle_number}
