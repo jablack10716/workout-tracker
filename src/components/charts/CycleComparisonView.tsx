@@ -132,7 +132,7 @@ export const CycleComparisonView: React.FC<CycleComparisonViewProps> = ({ compar
                 <View className="flex-row justify-between pb-1.5 mb-1.5 border-b border-slate-700/50">
                   <Text className="text-slate-500 text-[10px] font-bold uppercase w-12">Set</Text>
                   <Text className="text-slate-400 text-[10px] font-bold uppercase flex-1 text-center">
-                    Cycle {previousCycle.cycleNumber} ({prevEx?.date || '—'})
+                    Cycle {previousCycle.cycleNumber} ({previousCycle.date})
                   </Text>
                   <Text className="text-slate-200 text-[10px] font-bold uppercase flex-1 text-center">
                     Cycle {latestCycle.cycleNumber} ({latestCycle.date})
