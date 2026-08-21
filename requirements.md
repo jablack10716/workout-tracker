@@ -17,7 +17,7 @@ Each exercise in the master library requires the following properties:
 
 ### 1.2 Muscle Group Volume Mapping (Fractional Vectors)
 Every exercise must map to a target muscle group matrix using a fractional rating system (`1.0` or `0.5`). This data calculates active and predicted training volume.
-*   **Supported Muscle Groups:** Chest, Back, Shoulders, Legs, Biceps, Triceps.
+*   **Supported Muscle Groups:** Chest, Back, Shoulders, Legs, Biceps, Triceps, Core.
 *   *Example Configurations:*
     *   `Dumbbell Bench Press`: Chest = 1.0, Triceps = 0.5 (All others = 0)
     *   `Rows`: Back = 1.0, Biceps = 0.5 (All others = 0)

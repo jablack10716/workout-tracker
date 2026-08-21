@@ -35,7 +35,7 @@ export interface DashboardStats {
   currentDayNumber: number;
 }
 
-const MUSCLE_GROUPS = ['Chest', 'Back', 'Shoulders', 'Legs', 'Biceps', 'Triceps'] as const;
+const MUSCLE_GROUPS = ['Chest', 'Back', 'Shoulders', 'Legs', 'Biceps', 'Triceps', 'Core'] as const;
 
 /**
  * Returns the start of the current week (Monday at 00:00:00.000 local time).

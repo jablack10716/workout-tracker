@@ -5,7 +5,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { supabase } from '../../src/lib/supabase';
 import { X, Plus, Trash2, ChevronRight, Check, Sparkles, AlertCircle, Dumbbell, Search, Layers, Link2, Unlink } from 'lucide-react-native';
 
-const MUSCLE_GROUPS = ['Chest', 'Back', 'Shoulders', 'Legs', 'Biceps', 'Triceps'] as const;
+const MUSCLE_GROUPS = ['Chest', 'Back', 'Shoulders', 'Legs', 'Biceps', 'Triceps', 'Core'] as const;
 
 // Helper to determine muscle synergy for a group of exercises
 const getSupersetSynergy = (exercises: RoutineExerciseItem[]) => {
@@ -444,7 +444,8 @@ export default function RoutineBuilderScreen() {
       Shoulders: 0,
       Legs: 0,
       Biceps: 0,
-      Triceps: 0
+      Triceps: 0,
+      Core: 0
     };
 
     days.forEach((day) => {
