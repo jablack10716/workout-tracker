@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { View, Text, TouchableOpacity, ScrollView, ActivityIndicator, Alert } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { supabase } from '../../src/lib/supabase';
@@ -25,11 +25,17 @@ export default function WorkoutCompleteScreen() {
     totalExercises: 0
   });
 
+  const isSavingRef = useRef(false);
+  const savedSessionIdRef = useRef<string | null>(null);
+
   useEffect(() => {
     saveWorkoutSession();
   }, []);
 
   const saveWorkoutSession = async () => {
+    if (isSavingRef.current) return;
+    isSavingRef.current = true;
+
     try {
       setSaving(true);
       setSaveError(null);
@@ -66,68 +72,147 @@ export default function WorkoutCompleteScreen() {
         totalExercises: exerciseCount
       });
 
-      // 1. Insert Session (including status = 'completed', duration_seconds, and routine_day_id)
-      const sessionPayload: any = {
-        user_id: userId,
-        routine_id: routineId,
-        cycle_number: currentCycle,
-        status: 'completed',
-        started_at: new Date(Date.now() - durationSeconds * 1000).toISOString(),
-        completed_at: new Date().toISOString(),
-        duration_seconds: durationSeconds
-      };
+      // 1. Resolve Session ID (idempotent across retries and mount cycles)
+      let sessionId = savedSessionIdRef.current;
 
-      if (routineDayId) {
-        sessionPayload.routine_day_id = routineDayId;
+      if (!sessionId) {
+        if (routineId && routineDayId) {
+          const { data: existingSession } = await supabase
+            .from('sessions')
+            .select('id')
+            .eq('user_id', userId)
+            .eq('routine_id', routineId)
+            .eq('routine_day_id', routineDayId)
+            .eq('cycle_number', currentCycle)
+            .limit(1)
+            .maybeSingle();
+
+          if (existingSession?.id) {
+            sessionId = existingSession.id;
+            savedSessionIdRef.current = sessionId;
+          }
+        }
+
+        if (!sessionId) {
+          const sessionPayload: any = {
+            user_id: userId,
+            routine_id: routineId,
+            cycle_number: currentCycle,
+            status: 'completed',
+            started_at: new Date(Date.now() - durationSeconds * 1000).toISOString(),
+            completed_at: new Date().toISOString(),
+            duration_seconds: durationSeconds
+          };
+
+          if (routineDayId) {
+            sessionPayload.routine_day_id = routineDayId;
+          }
+
+          const { data: sessionData, error: sessionErr } = await supabase
+            .from('sessions')
+            .insert([sessionPayload])
+            .select()
+            .single();
+
+          if (sessionErr || !sessionData) throw sessionErr || new Error('Failed to create session');
+          sessionId = sessionData.id;
+          savedSessionIdRef.current = sessionId;
+        }
       }
 
-      const { data: sessionData, error: sessionErr } = await supabase
-        .from('sessions')
-        .insert([sessionPayload])
-        .select()
-        .single();
-
-      if (sessionErr || !sessionData) throw sessionErr || new Error('Failed to create session');
-
-      const sessionId = sessionData.id;
+      // Fetch routine days once outside the loop to optimize queries
+      let routineDayIds: string[] = [];
+      if (routineId) {
+        try {
+          const { data: rDays } = await supabase
+            .from('routine_days')
+            .select('id')
+            .eq('routine_id', routineId);
+          if (rDays && rDays.length > 0) {
+            routineDayIds = rDays.map((d: any) => d.id);
+          }
+        } catch (rDaysErr) {
+          console.warn('Error fetching routine days for target sync:', rDaysErr);
+        }
+      }
 
       // 2. Insert Session Exercises & Sets
       for (const ex of workoutPayload) {
-        let seDataFinal: any = null;
-        const { data: seData, error: seErr } = await supabase
-          .from('session_exercises')
-          .insert([{
-            session_id: sessionId,
-            exercise_id: ex.exercise_id,
-            next_target_weight: ex.is_bodyweight_only ? null : parseFloat(ex.next_target_weight) || null,
-            superset_id: ex.superset_id || null,
-            superset_order: ex.superset_order || 1
-          }])
-          .select()
-          .single();
-
-        if (seErr) {
-          if (seErr.message?.includes('superset_id') || seErr.details?.includes('superset_id') || seErr.message?.includes('schema cache')) {
-            const { data: fallbackSeData, error: fallbackSeErr } = await supabase
-              .from('session_exercises')
-              .insert([{
-                session_id: sessionId,
-                exercise_id: ex.exercise_id,
-                next_target_weight: ex.is_bodyweight_only ? null : parseFloat(ex.next_target_weight) || null,
-              }])
-              .select()
-              .single();
-            if (!fallbackSeErr && fallbackSeData) {
-              seDataFinal = fallbackSeData;
+        // Resolve target weight: prioritize next_target_weight, fallback to highest completed set weight
+        let resolvedTargetWeight: number | null = null;
+        if (!ex.is_bodyweight_only) {
+          const parsed = parseFloat(ex.next_target_weight);
+          if (!isNaN(parsed) && parsed > 0) {
+            resolvedTargetWeight = parsed;
+          } else {
+            const completedSets = (ex.sets || []).filter((s: any) => s.is_completed);
+            const weights = completedSets
+              .map((s: any) => parseFloat(s.weight))
+              .filter((w: any) => !isNaN(w) && w > 0);
+            if (weights.length > 0) {
+              resolvedTargetWeight = Math.max(...weights);
             }
           }
-        } else if (seData) {
-          seDataFinal = seData;
         }
 
-        if (!seDataFinal) continue;
+        let seDataFinal: any = null;
+
+        // Check if this exercise was already inserted for this session (idempotent retry)
+        const { data: existingSe } = await supabase
+          .from('session_exercises')
+          .select('id')
+          .eq('session_id', sessionId)
+          .eq('exercise_id', ex.exercise_id)
+          .limit(1)
+          .maybeSingle();
+
+        if (existingSe?.id) {
+          seDataFinal = existingSe;
+        } else {
+          const { data: seData, error: seErr } = await supabase
+            .from('session_exercises')
+            .insert([{
+              session_id: sessionId,
+              exercise_id: ex.exercise_id,
+              next_target_weight: resolvedTargetWeight,
+              superset_id: ex.superset_id || null,
+              superset_order: ex.superset_order || 1
+            }])
+            .select()
+            .single();
+
+          if (seErr) {
+            if (seErr.message?.includes('superset_id') || seErr.details?.includes('superset_id') || seErr.message?.includes('schema cache')) {
+              const { data: fallbackSeData, error: fallbackSeErr } = await supabase
+                .from('session_exercises')
+                .insert([{
+                  session_id: sessionId,
+                  exercise_id: ex.exercise_id,
+                  next_target_weight: resolvedTargetWeight,
+                }])
+                .select()
+                .single();
+              if (!fallbackSeErr && fallbackSeData) {
+                seDataFinal = fallbackSeData;
+              } else {
+                throw fallbackSeErr || new Error(`Failed to save exercise "${ex.name || ex.exercise_id}"`);
+              }
+            } else {
+              throw seErr;
+            }
+          } else if (seData) {
+            seDataFinal = seData;
+          }
+        }
+
+        if (!seDataFinal) {
+          throw new Error(`Failed to save exercise "${ex.name || ex.exercise_id}"`);
+        }
 
         const seId = seDataFinal.id;
+
+        // Clean any previously inserted sets for this session exercise to prevent duplicate sets on retry
+        await supabase.from('session_sets').delete().eq('session_exercise_id', seId);
 
         const setRows = (ex.sets || []).map((s: any) => ({
           session_exercise_id: seId,
@@ -139,17 +224,29 @@ export default function WorkoutCompleteScreen() {
 
         if (setRows.length > 0) {
           const { error: setsErr } = await supabase.from('session_sets').insert(setRows);
-          if (setsErr) console.warn('Error inserting session sets:', setsErr);
+          if (setsErr) throw setsErr;
         }
 
-        // Sync target weight back to routine_exercises for persistent routine baseline
-        if (ex.routine_exercise_id && ex.next_target_weight && !ex.is_bodyweight_only) {
-          const nextTargetNum = parseFloat(ex.next_target_weight);
-          if (!isNaN(nextTargetNum)) {
+        // Sync target weight back to routine_exercises for persistent routine baseline across the active routine
+        if (resolvedTargetWeight !== null && !ex.is_bodyweight_only) {
+          if (ex.routine_exercise_id) {
             await supabase
               .from('routine_exercises')
-              .update({ target_weight: nextTargetNum })
+              .update({ target_weight: resolvedTargetWeight })
               .eq('id', ex.routine_exercise_id);
+          }
+
+          // Also propagate to other days in this routine that share the same exercise
+          if (routineDayIds.length > 0 && ex.exercise_id) {
+            try {
+              await supabase
+                .from('routine_exercises')
+                .update({ target_weight: resolvedTargetWeight })
+                .in('routine_day_id', routineDayIds)
+                .eq('exercise_id', ex.exercise_id);
+            } catch (syncErr) {
+              console.warn('Error syncing target weight to routine days:', syncErr);
+            }
           }
         }
       }
@@ -179,6 +276,9 @@ export default function WorkoutCompleteScreen() {
       setSaving(false);
       setSaved(false);
       setSaveError(err.message || 'An unexpected error occurred while saving your workout.');
+    } finally {
+      setSaving(false);
+      isSavingRef.current = false;
     }
   };
 

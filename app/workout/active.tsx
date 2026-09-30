@@ -13,11 +13,13 @@ import {
   Dumbbell,
   Sparkles,
   ArrowRight,
+  ArrowDown,
   Layers,
   Flame,
   Zap,
   Trophy,
   Clock,
+  CheckCircle2,
 } from 'lucide-react-native';
 import { calculateEstimated1RM } from '../../src/utils/analyticsEngine';
 import * as Haptics from 'expo-haptics';
@@ -38,6 +40,7 @@ type WorkoutExerciseItem = {
   is_bodyweight_only: boolean;
   prev_performance?: string;
   next_target_weight: string;
+  is_target_weight_manually_edited?: boolean;
   superset_id?: string | null;
   superset_order?: number;
   sets: SetData[];
@@ -126,6 +129,9 @@ export default function ActiveWorkoutScreen() {
       const exerciseHistoryMap: Record<string, {
         nextTargetWeight: number | null;
         nextTargetReps: number | null;
+        lastCompletedWeight: number | null;
+        lastCompletedReps: number | null;
+        maxCompletedWeight: number | null;
         completedSets: Array<{ set_number: number; weight: number | null; reps: number | null }>;
       }> = {};
 
@@ -155,26 +161,43 @@ export default function ActiveWorkoutScreen() {
             `)
             .eq('sessions.user_id', userId)
             .eq('sessions.status', 'completed')
-            .in('exercise_id', exerciseIds)
-            .order('completed_at', { referencedTable: 'sessions', ascending: false });
+            .in('exercise_id', exerciseIds);
 
           if (!pErr && pastData) {
+            // Sort past sessions deterministically: most recently completed first
+            pastData.sort((a: any, b: any) => {
+              const dateA = new Date(a.sessions?.completed_at || a.sessions?.started_at || 0).getTime();
+              const dateB = new Date(b.sessions?.completed_at || b.sessions?.started_at || 0).getTime();
+              return dateB - dateA;
+            });
+
             for (const row of pastData) {
               const exId = row.exercise_id;
-              // Because rows are ordered by completed_at descending, take the most recent session for each exercise
+              // Because rows are sorted by completed_at descending, take the most recent session for each exercise
               if (!exerciseHistoryMap[exId]) {
                 const validSets = (row.session_sets || [])
                   .filter((s: any) => s.is_completed)
                   .sort((a: any, b: any) => (a.set_number || 0) - (b.set_number || 0));
 
+                const completedSetsList = validSets.map((s: any) => ({
+                  set_number: s.set_number,
+                  weight: s.weight !== null && s.weight !== undefined ? Number(s.weight) : null,
+                  reps: s.reps !== null && s.reps !== undefined ? Number(s.reps) : null,
+                }));
+
+                const lastCompleted = completedSetsList[completedSetsList.length - 1];
+                const validWeights = completedSetsList
+                  .map((s: any) => s.weight)
+                  .filter((w: any): w is number => w !== null && !isNaN(w));
+                const maxCompletedW = validWeights.length > 0 ? Math.max(...validWeights) : null;
+
                 exerciseHistoryMap[exId] = {
                   nextTargetWeight: row.next_target_weight !== null && row.next_target_weight !== undefined ? Number(row.next_target_weight) : null,
                   nextTargetReps: row.next_target_reps !== null && row.next_target_reps !== undefined ? Number(row.next_target_reps) : null,
-                  completedSets: validSets.map((s: any) => ({
-                    set_number: s.set_number,
-                    weight: s.weight !== null && s.weight !== undefined ? Number(s.weight) : null,
-                    reps: s.reps !== null && s.reps !== undefined ? Number(s.reps) : null,
-                  }))
+                  lastCompletedWeight: lastCompleted?.weight ?? null,
+                  lastCompletedReps: lastCompleted?.reps ?? null,
+                  maxCompletedWeight: maxCompletedW,
+                  completedSets: completedSetsList
                 };
               }
             }
@@ -198,27 +221,35 @@ export default function ActiveWorkoutScreen() {
 
         if (history && (history.nextTargetWeight !== null || history.completedSets.length > 0)) {
           const firstSet = history.completedSets[0];
+          const lastSet = history.completedSets[history.completedSets.length - 1];
 
           if (isBw) {
             baseWeight = '0';
             baseReps = history.nextTargetReps !== null
               ? history.nextTargetReps.toString()
-              : (firstSet?.reps?.toString() || re.target_reps?.toString() || '10');
-            exPrevPerfSummary = firstSet?.reps !== undefined && firstSet?.reps !== null ? `BW × ${firstSet.reps}` : 'BW × 10';
+              : (lastSet?.reps?.toString() || firstSet?.reps?.toString() || re.target_reps?.toString() || '10');
+            exPrevPerfSummary = lastSet?.reps !== undefined && lastSet?.reps !== null
+              ? `BW × ${lastSet.reps}`
+              : (firstSet?.reps !== undefined && firstSet?.reps !== null ? `BW × ${firstSet.reps}` : 'BW × 10');
           } else {
-            if (history.nextTargetWeight !== null) {
-              baseWeight = history.nextTargetWeight.toString();
-            } else if (firstSet && firstSet.weight !== null) {
-              baseWeight = firstSet.weight.toString();
+            // Prioritize: explicit next target weight -> last completed set weight -> max completed set weight -> first set weight -> routine target weight -> 135
+            const resolvedWeight = history.nextTargetWeight !== null
+              ? history.nextTargetWeight
+              : (history.lastCompletedWeight ?? history.maxCompletedWeight ?? firstSet?.weight);
+
+            if (resolvedWeight !== null && resolvedWeight !== undefined) {
+              baseWeight = resolvedWeight.toString();
             } else {
               baseWeight = re.target_weight ? re.target_weight.toString() : '135';
             }
 
             baseReps = history.nextTargetReps !== null
               ? history.nextTargetReps.toString()
-              : (firstSet?.reps?.toString() || re.target_reps?.toString() || '10');
+              : (lastSet?.reps?.toString() || firstSet?.reps?.toString() || re.target_reps?.toString() || '10');
 
-            if (firstSet && firstSet.weight !== null && firstSet.reps !== null) {
+            if (lastSet && lastSet.weight !== null && lastSet.reps !== null) {
+              exPrevPerfSummary = `${lastSet.weight} lbs × ${lastSet.reps}`;
+            } else if (firstSet && firstSet.weight !== null && firstSet.reps !== null) {
               exPrevPerfSummary = `${firstSet.weight} lbs × ${firstSet.reps}`;
             } else if (re.target_weight) {
               exPrevPerfSummary = `${re.target_weight} lbs × ${re.target_reps || 10}`;
@@ -252,9 +283,8 @@ export default function ActiveWorkoutScreen() {
                 setPrevPerf = `BW × ${prevSetData.reps}`;
               }
             } else {
-              if (prevSetData.weight !== null && prevSetData.weight !== undefined) {
-                setWeight = history?.nextTargetWeight !== null ? history.nextTargetWeight.toString() : prevSetData.weight.toString();
-              }
+              // Editable input for each set starts at baseWeight (the final top weight achieved, 20 lbs)
+              // But ghost text shows exactly what was done for this specific set
               if (prevSetData.reps !== null && prevSetData.reps !== undefined) {
                 setReps = prevSetData.reps.toString();
               }
@@ -281,6 +311,7 @@ export default function ActiveWorkoutScreen() {
           is_bodyweight_only: isBw,
           prev_performance: exPrevPerfSummary,
           next_target_weight: baseWeight,
+          is_target_weight_manually_edited: false,
           superset_id: re.superset_id || null,
           superset_order: re.superset_order || 1,
           sets: initialSets
@@ -294,109 +325,195 @@ export default function ActiveWorkoutScreen() {
 
   // Toggle Set Complete & Trigger Smart Rest Timer
   const handleToggleSetComplete = (exIdx: number, setIdx: number) => {
-    setWorkoutExercises((prev) => {
-      const copy = [...prev];
-      const currentEx = copy[exIdx];
-      const targetSet = currentEx.sets[setIdx];
-      const willBeCompleted = !targetSet.is_completed;
-      targetSet.is_completed = willBeCompleted;
+    const targetEx = workoutExercises[exIdx];
+    if (!targetEx || !targetEx.sets[setIdx]) return;
 
-      // Trigger Rest Timer if completed
-      if (willBeCompleted) {
-        if (currentEx.superset_id) {
-          // Check if this is the last exercise in the superset group for this round
-          const supersetGroup = copy.filter((e) => e.superset_id === currentEx.superset_id);
-          const currentOrder = currentEx.superset_order || 1;
-          const maxOrder = Math.max(...supersetGroup.map((e) => e.superset_order || 1));
+    const willBeCompleted = !targetEx.sets[setIdx].is_completed;
+    let durationToSet: number | null = null;
+    let cancelTimer = false;
 
-          const isLastInRound = currentOrder === maxOrder;
+    if (willBeCompleted) {
+      if (targetEx.superset_id) {
+        const supersetGroup = workoutExercises.filter((e) => e.superset_id === targetEx.superset_id);
+        const isRoundComplete =
+          supersetGroup.length > 0 &&
+          supersetGroup.every((e) =>
+            e === targetEx ? true : Boolean(e.sets[setIdx]?.is_completed)
+          );
 
-          if (isLastInRound) {
-            // Completed the full superset round: start recovery rest timer
-            const roundRestDuration = Math.max(
-              ...supersetGroup.map((e) => e.default_rest_timer_seconds || 90)
-            );
-            setTimerSeconds(roundRestDuration);
-            setTimerActive(true);
-          } else {
-            // Intra-superset: instant switch (no rest delay)
-            setTimerActive(false);
-            setTimerSeconds(null);
-          }
+        if (isRoundComplete) {
+          durationToSet = Math.max(
+            ...supersetGroup.map((e) => e.default_rest_timer_seconds || 90)
+          );
         } else {
-          // Standalone straight set: start standard rest timer
-          const restDuration = currentEx.default_rest_timer_seconds || 90;
-          setTimerSeconds(restDuration);
-          setTimerActive(true);
+          cancelTimer = true;
         }
+      } else {
+        durationToSet = targetEx.default_rest_timer_seconds || 90;
       }
+    }
 
-      return copy;
+    setWorkoutExercises((prev) => {
+      return prev.map((ex, i) => {
+        if (i !== exIdx) return ex;
+
+        const nextSets = ex.sets.map((s, si) =>
+          si === setIdx ? { ...s, is_completed: willBeCompleted } : s
+        );
+
+        let nextTarget = ex.next_target_weight;
+        if (!ex.is_bodyweight_only && !ex.is_target_weight_manually_edited) {
+          const completedWeights = nextSets
+            .filter((s) => s.is_completed)
+            .map((s) => parseFloat(s.weight))
+            .filter((w) => !isNaN(w) && w > 0);
+          if (completedWeights.length > 0) {
+            nextTarget = Math.max(...completedWeights).toString();
+          }
+        }
+
+        return {
+          ...ex,
+          sets: nextSets,
+          next_target_weight: nextTarget
+        };
+      });
     });
+
+    if (durationToSet !== null) {
+      setTimerSeconds(durationToSet);
+      setTimerActive(true);
+    } else if (cancelTimer) {
+      setTimerActive(false);
+      setTimerSeconds(null);
+    }
   };
 
   // Set Cloning Engine (Editing Set 1 auto-fills subsequent sets if uncompleted)
   const handleChangeWeight = (exIdx: number, setIdx: number, val: string) => {
     setWorkoutExercises((prev) => {
-      const copy = [...prev];
-      copy[exIdx].sets[setIdx].weight = val;
+      return prev.map((ex, i) => {
+        if (i !== exIdx) return ex;
 
-      // Auto-clone Set 1 down to uncompleted sets
-      if (setIdx === 0) {
-        for (let i = 1; i < copy[exIdx].sets.length; i++) {
-          if (!copy[exIdx].sets[i].is_completed) {
-            copy[exIdx].sets[i].weight = val;
+        const nextSets = ex.sets.map((s, si) => {
+          if (si === setIdx) {
+            return { ...s, weight: val };
+          }
+          // Auto-clone Set 1 down to uncompleted sets
+          if (setIdx === 0 && !s.is_completed) {
+            return { ...s, weight: val };
+          }
+          return s;
+        });
+
+        let nextTarget = ex.next_target_weight;
+        if (!ex.is_bodyweight_only && !ex.is_target_weight_manually_edited) {
+          const completedWeights = nextSets
+            .filter((s) => s.is_completed)
+            .map((s) => parseFloat(s.weight))
+            .filter((w) => !isNaN(w) && w > 0);
+          if (completedWeights.length > 0) {
+            nextTarget = Math.max(...completedWeights).toString();
+          } else if (setIdx === 0) {
+            nextTarget = val;
           }
         }
-        copy[exIdx].next_target_weight = val;
-      }
 
-      return copy;
+        return {
+          ...ex,
+          sets: nextSets,
+          next_target_weight: nextTarget
+        };
+      });
     });
   };
 
   const handleChangeReps = (exIdx: number, setIdx: number, val: string) => {
     setWorkoutExercises((prev) => {
-      const copy = [...prev];
-      copy[exIdx].sets[setIdx].reps = val;
+      return prev.map((ex, i) => {
+        if (i !== exIdx) return ex;
 
-      // Auto-clone Set 1 reps
-      if (setIdx === 0) {
-        for (let i = 1; i < copy[exIdx].sets.length; i++) {
-          if (!copy[exIdx].sets[i].is_completed) {
-            copy[exIdx].sets[i].reps = val;
+        const nextSets = ex.sets.map((s, si) => {
+          if (si === setIdx) {
+            return { ...s, reps: val };
           }
-        }
-      }
+          // Auto-clone Set 1 reps down to uncompleted sets
+          if (setIdx === 0 && !s.is_completed) {
+            return { ...s, reps: val };
+          }
+          return s;
+        });
 
-      return copy;
+        return {
+          ...ex,
+          sets: nextSets
+        };
+      });
     });
   };
 
   const handleChangeNextTarget = (exIdx: number, val: string) => {
     setWorkoutExercises((prev) => {
-      const copy = [...prev];
-      copy[exIdx].next_target_weight = val;
-      return copy;
+      return prev.map((ex, i) => {
+        if (i !== exIdx) return ex;
+        return {
+          ...ex,
+          next_target_weight: val,
+          is_target_weight_manually_edited: true
+        };
+      });
     });
   };
 
   // Add extra set to exercise
   const handleAddSet = (exIdx: number) => {
     setWorkoutExercises((prev) => {
-      const copy = [...prev];
-      const currentSets = copy[exIdx].sets;
-      const lastSet = currentSets[currentSets.length - 1];
-      const newSetNumber = currentSets.length + 1;
-      
-      copy[exIdx].sets.push({
-        set_number: newSetNumber,
-        weight: lastSet ? lastSet.weight : '135',
-        reps: lastSet ? lastSet.reps : '10',
-        prev_performance: copy[exIdx].prev_performance || '—',
-        is_completed: false
+      return prev.map((ex, i) => {
+        if (i !== exIdx) return ex;
+        const currentSets = ex.sets;
+        const lastSet = currentSets[currentSets.length - 1];
+        const newSetNumber = currentSets.length + 1;
+
+        return {
+          ...ex,
+          sets: [
+            ...currentSets,
+            {
+              set_number: newSetNumber,
+              weight: lastSet ? lastSet.weight : (ex.is_bodyweight_only ? '0' : '135'),
+              reps: lastSet ? lastSet.reps : '10',
+              prev_performance: ex.prev_performance || '—',
+              is_completed: false
+            }
+          ]
+        };
       });
-      return copy;
+    });
+  };
+
+  // Add round to all exercises in a superset
+  const handleAddSupersetRound = (supersetId: string) => {
+    setWorkoutExercises((prev) => {
+      return prev.map((ex) => {
+        if (ex.superset_id !== supersetId) return ex;
+        const currentSets = ex.sets;
+        const lastSet = currentSets[currentSets.length - 1];
+        const newSetNumber = currentSets.length + 1;
+
+        return {
+          ...ex,
+          sets: [
+            ...currentSets,
+            {
+              set_number: newSetNumber,
+              weight: lastSet ? lastSet.weight : (ex.is_bodyweight_only ? '0' : '135'),
+              reps: lastSet ? lastSet.reps : '10',
+              prev_performance: ex.prev_performance || '—',
+              is_completed: false
+            }
+          ]
+        };
+      });
     });
   };
 
@@ -416,7 +533,7 @@ export default function ActiveWorkoutScreen() {
     const durationSeconds = Math.max(Math.round((Date.now() - startTime) / 1000), 60);
 
     // Navigate to completion summary with workout payload
-    router.push({
+    router.replace({
       pathname: '/workout/complete',
       params: {
         routine_id: activeRoutine.id,
@@ -651,114 +768,288 @@ export default function ActiveWorkoutScreen() {
               const letter = supersetLetterMap[sId] || 'A';
               const groupItems = workoutExercises
                 .map((e, idx) => ({ ex: e, originalIndex: idx }))
-                .filter(item => item.ex.superset_id === sId);
+                .filter((item) => item.ex.superset_id === sId)
+                .sort((a, b) => (a.ex.superset_order || 1) - (b.ex.superset_order || 1));
+
+              const maxRounds = Math.max(...groupItems.map((item) => item.ex.sets.length), 1);
+              const roundRestDuration = Math.max(
+                ...groupItems.map((item) => item.ex.default_rest_timer_seconds || 90)
+              );
 
               elements.push(
                 <View key={`superset_${sId}`} className="bg-indigo-950/20 border-2 border-indigo-500/40 rounded-3xl p-4 mb-6">
                   {/* Superset Header Banner */}
-                  <View className="flex-row justify-between items-center mb-4 pb-3 border-b border-indigo-500/30">
-                    <View className="flex-row items-center flex-1 mr-2">
-                      <View className="bg-indigo-600 px-3 py-1 rounded-xl mr-2 flex-row items-center">
-                        <Layers color="white" size={14} className="mr-1.5" />
-                        <Text className="text-white font-extrabold text-xs tracking-wider">SUPERSET {letter}</Text>
+                  <View className="mb-4 pb-3 border-b border-indigo-500/30">
+                    <View className="flex-row justify-between items-center mb-1.5">
+                      <View className="flex-row items-center">
+                        <View className="bg-indigo-600 px-3 py-1 rounded-xl mr-2 flex-row items-center">
+                          <Layers color="white" size={14} className="mr-1.5" />
+                          <Text className="text-white font-extrabold text-xs tracking-wider">SUPERSET {letter}</Text>
+                        </View>
+                        <View className="bg-indigo-500/20 px-2 py-0.5 rounded-lg border border-indigo-500/30">
+                          <Text className="text-indigo-300 text-[10px] font-bold">
+                            {groupItems.length} Exercises • {maxRounds} Rounds
+                          </Text>
+                        </View>
                       </View>
-                      <Text className="text-indigo-200 text-xs font-semibold flex-1" numberOfLines={1}>
-                        {groupItems.map(g => g.ex.name).join(' + ')}
-                      </Text>
+                      <View className="flex-row items-center">
+                        <Timer color="#a78bfa" size={13} className="mr-1" />
+                        <Text className="text-indigo-300 text-xs font-semibold">{roundRestDuration}s Rest</Text>
+                      </View>
                     </View>
+                    <Text className="text-slate-300 text-xs font-semibold pl-0.5">
+                      {groupItems.map((g, idx) => `${letter}${g.ex.superset_order || idx + 1}: ${g.ex.name}`).join('  +  ')}
+                    </Text>
                   </View>
 
-                  {/* Superset Exercises */}
-                  {groupItems.map((item, subIdx) => {
-                    const groupEx = item.ex;
-                    const originalExIdx = item.originalIndex;
-                    const tag = `${letter}${groupEx.superset_order || subIdx + 1}`;
-
-                    let topSetE1RM = 0;
-                    groupEx.sets.forEach((st) => {
-                      if (st.is_completed) {
-                        const e1rm = calculateEstimated1RM(parseFloat(st.weight) || 0, parseInt(st.reps, 10) || 0);
-                        if (e1rm > topSetE1RM) topSetE1RM = e1rm;
-                      }
-                    });
+                  {/* Superset Rounds */}
+                  {Array.from({ length: maxRounds }).map((_, roundIdx) => {
+                    const roundNumber = roundIdx + 1;
+                    const roundExercises = groupItems.filter((item) => Boolean(item.ex.sets[roundIdx]));
+                    const isRoundComplete =
+                      roundExercises.length > 0 &&
+                      roundExercises.every((item) => item.ex.sets[roundIdx]?.is_completed);
 
                     return (
-                      <View key={groupEx.routine_exercise_id || `sub_${originalExIdx}`} className="bg-slate-900 p-4 rounded-2xl border border-slate-800 mb-4">
-                        <View className="flex-row justify-between items-center mb-3">
-                          <View className="flex-row items-center flex-1 mr-2">
-                            <View className="bg-indigo-500/30 border border-indigo-500/50 px-2.5 py-1 rounded-lg mr-2.5">
-                              <Text className="text-indigo-300 font-mono font-bold text-xs">{tag}</Text>
-                            </View>
-                            <View className="flex-1">
-                              <Text className="text-white font-bold text-base">{groupEx.name}</Text>
-                              <Text className="text-slate-400 text-xs">
-                                {groupEx.is_bodyweight_only ? 'Bodyweight' : 'Weighted'} • {groupEx.default_rest_timer_seconds}s Rest
+                      <View
+                        key={`round_${sId}_${roundNumber}`}
+                        className={`p-3.5 rounded-2xl border mb-4 ${
+                          isRoundComplete
+                            ? 'bg-emerald-950/20 border-emerald-500/30'
+                            : 'bg-slate-900 border-slate-800'
+                        }`}
+                      >
+                        {/* Round Header Bar */}
+                        <View className="flex-row justify-between items-center mb-3 pb-2 border-b border-slate-800/80">
+                          <View className="flex-row items-center">
+                            <View
+                              className={`w-6 h-6 rounded-full items-center justify-center mr-2 ${
+                                isRoundComplete ? 'bg-emerald-500/20' : 'bg-indigo-600/30'
+                              }`}
+                            >
+                              <Text
+                                className={`font-black text-xs ${
+                                  isRoundComplete ? 'text-emerald-400' : 'text-indigo-300'
+                                }`}
+                              >
+                                {roundNumber}
                               </Text>
                             </View>
+                            <Text className="text-white font-extrabold text-sm tracking-wide">
+                              ROUND {roundNumber}
+                            </Text>
                           </View>
-                          {topSetE1RM > 0 && !groupEx.is_bodyweight_only && (
-                            <View className="bg-purple-500/20 px-2 py-0.5 rounded-lg border border-purple-500/30">
-                              <Text className="text-purple-300 text-[10px] font-black">
-                                1RM ~{Math.round(topSetE1RM)}
-                              </Text>
+
+                          {isRoundComplete ? (
+                            <View className="bg-emerald-500/20 px-2.5 py-0.5 rounded-full border border-emerald-500/30 flex-row items-center">
+                              <CheckCircle2 color="#34d399" size={12} className="mr-1" />
+                              <Text className="text-emerald-300 text-[11px] font-bold">Round Completed</Text>
+                            </View>
+                          ) : (
+                            <View className="bg-slate-800 px-2.5 py-0.5 rounded-full border border-slate-700">
+                              <Text className="text-slate-400 text-[11px] font-medium">In Progress</Text>
                             </View>
                           )}
                         </View>
 
-                        {/* Set Table Column Headers */}
-                        <View className="flex-row items-center py-2 px-3 mb-1">
-                          <Text className="w-8 text-slate-500 text-xs font-bold text-center">SET</Text>
-                          <Text className="w-20 text-slate-500 text-xs font-bold px-1">PREVIOUS</Text>
-                          <Text className="flex-1 text-slate-500 text-xs font-bold text-center">LBS</Text>
-                          <Text className="flex-1 text-slate-500 text-xs font-bold text-center">REPS</Text>
-                          <Text className="w-10 text-slate-500 text-xs font-bold text-right">DONE</Text>
+                        {/* Column Subheaders */}
+                        <View className="flex-row items-center px-1 mb-1.5">
+                          <Text className="flex-1 text-slate-500 text-[11px] font-bold uppercase tracking-wider">
+                            Exercise / Prev
+                          </Text>
+                          <Text className="w-20 text-slate-500 text-[11px] font-bold text-center uppercase tracking-wider">
+                            Weight
+                          </Text>
+                          <Text className="w-16 text-slate-500 text-[11px] font-bold text-center uppercase tracking-wider">
+                            Reps
+                          </Text>
+                          <Text className="w-10 text-slate-500 text-[11px] font-bold text-right uppercase tracking-wider">
+                            Done
+                          </Text>
                         </View>
 
-                        {/* Set Rows */}
-                        {groupEx.sets.map((setData, setIdx) => (
-                          <SetRow
-                            key={setData.set_number}
-                            setIndex={setData.set_number}
-                            weight={setData.weight}
-                            reps={setData.reps}
-                            prevPerformance={setData.prev_performance || groupEx.prev_performance}
-                            isCompleted={setData.is_completed}
-                            onToggleComplete={() => handleToggleSetComplete(originalExIdx, setIdx)}
-                            onChangeWeight={(v) => handleChangeWeight(originalExIdx, setIdx, v)}
-                            onChangeReps={(v) => handleChangeReps(originalExIdx, setIdx, v)}
-                          />
-                        ))}
+                        {/* Exercise Rows within this Round */}
+                        {groupItems.map((item, subIdx) => {
+                          const groupEx = item.ex;
+                          const originalExIdx = item.originalIndex;
+                          const setData = groupEx.sets[roundIdx];
+                          if (!setData) return null;
 
-                        {/* Add Set Button */}
-                        <TouchableOpacity 
-                          onPress={() => handleAddSet(originalExIdx)}
-                          className="py-2.5 items-center justify-center bg-slate-800/60 rounded-xl border border-slate-700/50 mt-2 flex-row"
-                        >
-                          <Plus color="#94a3b8" size={16} className="mr-1" />
-                          <Text className="text-slate-300 font-semibold text-sm">Add Set</Text>
-                        </TouchableOpacity>
+                          const tag = `${letter}${groupEx.superset_order || subIdx + 1}`;
+                          const isDone = setData.is_completed;
+                          const prevSummary = setData.prev_performance || groupEx.prev_performance || '—';
 
-                        {/* Fresh Memory Overload Target Input */}
-                        <View className="mt-4 pt-3 border-t border-slate-800 flex-row items-center justify-between">
-                          <View className="flex-row items-center">
-                            <Sparkles color="#a78bfa" size={16} className="mr-2" />
-                            <Text className="text-purple-300 text-xs font-semibold">Next Target Weight</Text>
+                          return (
+                            <View key={`ex_${originalExIdx}_set_${roundIdx}`}>
+                              <View
+                                className={`py-2 px-2.5 rounded-xl border flex-row items-center ${
+                                  isDone
+                                    ? 'bg-emerald-950/30 border-emerald-500/40'
+                                    : 'bg-slate-800/80 border-slate-700/60'
+                                }`}
+                              >
+                                {/* Left Exercise Info & Prev */}
+                                <View className="flex-1 mr-2 justify-center">
+                                  <View className="flex-row items-center mb-0.5">
+                                    <View className="bg-indigo-500/30 border border-indigo-500/50 px-1.5 py-0.5 rounded mr-1.5">
+                                      <Text className="text-indigo-300 font-mono font-bold text-[10px]">{tag}</Text>
+                                    </View>
+                                    <Text className="text-white font-bold text-xs flex-1" numberOfLines={1}>
+                                      {groupEx.name}
+                                    </Text>
+                                  </View>
+                                  <Text className="text-slate-400 text-[11px] pl-0.5" numberOfLines={1}>
+                                    {prevSummary}
+                                  </Text>
+                                </View>
+
+                                {/* Weight Input */}
+                                <View className="w-20 px-1 justify-center">
+                                  {groupEx.is_bodyweight_only ? (
+                                    <View className="h-10 rounded-xl bg-slate-900/60 border border-slate-700 items-center justify-center">
+                                      <Text className="text-slate-400 font-bold text-xs">BW</Text>
+                                    </View>
+                                  ) : (
+                                    <TextInput
+                                      className={`h-10 rounded-xl px-1.5 py-0 text-center font-bold text-sm border ${
+                                        isDone
+                                          ? 'bg-emerald-900/20 text-emerald-300 border-emerald-700/50'
+                                          : 'bg-slate-900 text-white border-slate-700'
+                                      }`}
+                                      style={{ textAlignVertical: 'center', includeFontPadding: false }}
+                                      keyboardType="numeric"
+                                      placeholder="lbs"
+                                      placeholderTextColor="#475569"
+                                      value={setData.weight}
+                                      onChangeText={(v) => handleChangeWeight(originalExIdx, roundIdx, v)}
+                                      editable={!isDone}
+                                      selectTextOnFocus
+                                    />
+                                  )}
+                                </View>
+
+                                {/* Reps Input */}
+                                <View className="w-16 px-1 justify-center">
+                                  <TextInput
+                                    className={`h-10 rounded-xl px-1.5 py-0 text-center font-bold text-sm border ${
+                                      isDone
+                                        ? 'bg-emerald-900/20 text-emerald-300 border-emerald-700/50'
+                                        : 'bg-slate-900 text-white border-slate-700'
+                                    }`}
+                                    style={{ textAlignVertical: 'center', includeFontPadding: false }}
+                                    keyboardType="numeric"
+                                    placeholder="reps"
+                                    placeholderTextColor="#475569"
+                                    value={setData.reps}
+                                    onChangeText={(v) => handleChangeReps(originalExIdx, roundIdx, v)}
+                                    editable={!isDone}
+                                    selectTextOnFocus
+                                  />
+                                </View>
+
+                                {/* Done Toggle Button */}
+                                <View className="w-10 items-end justify-center pl-1">
+                                  <TouchableOpacity
+                                    onPress={() => handleToggleSetComplete(originalExIdx, roundIdx)}
+                                    className={`w-9 h-9 rounded-xl items-center justify-center border ${
+                                      isDone
+                                        ? 'bg-emerald-500 border-emerald-400'
+                                        : 'bg-slate-900 border-slate-700'
+                                    }`}
+                                  >
+                                    {isDone ? (
+                                      <Check color="white" size={18} strokeWidth={3} />
+                                    ) : (
+                                      <View className="w-2.5 h-2.5 rounded-sm bg-slate-600" />
+                                    )}
+                                  </TouchableOpacity>
+                                </View>
+                              </View>
+
+                              {/* Connector arrow between exercises inside the same round */}
+                              {subIdx < groupItems.length - 1 && (
+                                <View className="items-center my-1.5 flex-row justify-center">
+                                  <View className="h-[1px] bg-indigo-500/20 flex-1 mr-2" />
+                                  <View className="bg-indigo-950 px-2 py-0.5 rounded-full border border-indigo-500/30 flex-row items-center">
+                                    <ArrowDown color="#818cf8" size={10} className="mr-1" />
+                                    <Text className="text-indigo-300 text-[9px] font-bold uppercase tracking-wider">
+                                      Superset Next
+                                    </Text>
+                                  </View>
+                                  <View className="h-[1px] bg-indigo-500/20 flex-1 ml-2" />
+                                </View>
+                              )}
+                            </View>
+                          );
+                        })}
+
+                        {/* Round Completion / Recovery status footer */}
+                        {isRoundComplete && (
+                          <View className="mt-2.5 pt-2 border-t border-emerald-500/20 flex-row items-center justify-between">
+                            <View className="flex-row items-center">
+                              <CheckCircle2 color="#34d399" size={13} className="mr-1.5" />
+                              <Text className="text-emerald-300 text-xs font-semibold">Round {roundNumber} Completed</Text>
+                            </View>
+                            <Text className="text-emerald-400 text-[11px] font-mono font-medium">
+                              {roundRestDuration}s Recovery
+                            </Text>
                           </View>
-                          <View className="flex-row items-center bg-slate-800 px-3 py-1.5 rounded-xl border border-slate-700">
-                            <TextInput
-                              className="text-white font-bold text-sm w-16 text-center"
-                              style={{ textAlignVertical: 'center', includeFontPadding: false }}
-                              keyboardType="numeric"
-                              value={groupEx.next_target_weight}
-                              onChangeText={(v) => handleChangeNextTarget(originalExIdx, v)}
-                              selectTextOnFocus
-                            />
-                            <Text className="text-slate-400 text-xs font-medium ml-1">lbs</Text>
-                          </View>
-                        </View>
+                        )}
                       </View>
                     );
                   })}
+
+                  {/* Add Superset Round Button */}
+                  <TouchableOpacity
+                    onPress={() => handleAddSupersetRound(sId)}
+                    className="py-2.5 items-center justify-center bg-indigo-900/40 rounded-xl border border-indigo-500/40 mb-4 flex-row"
+                  >
+                    <Plus color="#a78bfa" size={16} className="mr-1.5" />
+                    <Text className="text-indigo-200 font-bold text-sm">Add Round to Superset {letter}</Text>
+                  </TouchableOpacity>
+
+                  {/* Superset Next Target Weights Section */}
+                  <View className="bg-slate-900/90 p-3.5 rounded-2xl border border-slate-800">
+                    <View className="flex-row items-center mb-2.5">
+                      <Sparkles color="#a78bfa" size={15} className="mr-1.5" />
+                      <Text className="text-purple-300 text-xs font-bold uppercase tracking-wider">
+                        Next Target Weights
+                      </Text>
+                    </View>
+                    <View className="space-y-2">
+                      {groupItems.map((item, subIdx) => {
+                        const groupEx = item.ex;
+                        const originalExIdx = item.originalIndex;
+                        const tag = `${letter}${groupEx.superset_order || subIdx + 1}`;
+                        return (
+                          <View
+                            key={`target_${originalExIdx}`}
+                            className="flex-row items-center justify-between bg-slate-800/60 px-3 py-2 rounded-xl border border-slate-700/50 mb-1.5"
+                          >
+                            <View className="flex-row items-center flex-1 mr-2">
+                              <View className="bg-indigo-500/30 px-1.5 py-0.5 rounded mr-1.5">
+                                <Text className="text-indigo-300 font-mono font-bold text-[10px]">{tag}</Text>
+                              </View>
+                              <Text className="text-slate-200 text-xs font-semibold flex-1" numberOfLines={1}>
+                                {groupEx.name}
+                              </Text>
+                            </View>
+                            <View className="flex-row items-center bg-slate-900 px-2.5 py-1 rounded-lg border border-slate-700">
+                              <TextInput
+                                className="text-white font-bold text-xs w-14 text-center"
+                                style={{ textAlignVertical: 'center', includeFontPadding: false }}
+                                keyboardType="numeric"
+                                value={groupEx.next_target_weight}
+                                onChangeText={(v) => handleChangeNextTarget(originalExIdx, v)}
+                                selectTextOnFocus
+                              />
+                              <Text className="text-slate-400 text-[10px] font-medium ml-1">lbs</Text>
+                            </View>
+                          </View>
+                        );
+                      })}
+                    </View>
+                  </View>
                 </View>
               );
             }
