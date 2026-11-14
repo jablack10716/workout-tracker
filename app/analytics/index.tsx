@@ -25,6 +25,7 @@ import {
   Zap,
 } from 'lucide-react-native';
 import {
+  calculateEstimated1RM,
   extractPersonalRecords,
   getExerciseE1RMHistory,
   getSessionVolumeHistory,
@@ -149,9 +150,9 @@ export default function AnalyticsScreen() {
       (s.session_exercises || []).forEach((se: any) => {
         const exName = se.exercises?.name || 'Exercise';
         (se.session_sets || []).forEach((st: any) => {
-          const w = st.weight || 0;
-          const r = st.reps || 0;
-          const e1rm = w > 0 && r > 0 ? Math.round(w * (1 + r / 30)) : 0;
+          const w = Number(st.weight) || 0;
+          const r = Number(st.reps) || 0;
+          const e1rm = calculateEstimated1RM(w, r);
           csvContent += `"${date}","${routineName}",${cycleNum},"${exName}",${st.set_number},${w},${r},${st.is_completed},${e1rm}\n`;
         });
       });

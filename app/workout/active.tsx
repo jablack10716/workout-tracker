@@ -1,9 +1,26 @@
 import { useState, useEffect, useRef } from 'react';
-import { View, Text, ScrollView, TouchableOpacity, Alert, ActivityIndicator, TextInput, Platform } from 'react-native';
+import {
+  View,
+  Text,
+  ScrollView,
+  TouchableOpacity,
+  Alert,
+  ActivityIndicator,
+  TextInput,
+  Platform,
+  AppState,
+} from 'react-native';
 import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import * as KeepAwake from 'expo-keep-awake';
 import { supabase } from '../../src/lib/supabase';
 import { SetRow } from '../../src/components/SetRow';
+import {
+  useActiveWorkoutStore,
+  ActiveWorkoutExercise,
+  ActiveWorkoutSet,
+} from '../../src/store/useActiveWorkoutStore';
+import { usePreferencesStore } from '../../src/store/usePreferencesStore';
 import {
   X,
   Check,
@@ -12,84 +29,162 @@ import {
   FastForward,
   Dumbbell,
   Sparkles,
-  ArrowRight,
   ArrowDown,
   Layers,
   Flame,
   Zap,
-  Trophy,
-  Clock,
   CheckCircle2,
 } from 'lucide-react-native';
 import { calculateEstimated1RM } from '../../src/utils/analyticsEngine';
 import * as Haptics from 'expo-haptics';
 
-type SetData = {
-  set_number: number;
-  weight: string;
-  reps: string;
-  prev_performance?: string;
-  is_completed: boolean;
-};
-
-type WorkoutExerciseItem = {
-  routine_exercise_id: string;
-  exercise_id: string;
-  name: string;
-  default_rest_timer_seconds: number;
-  is_bodyweight_only: boolean;
-  prev_performance?: string;
-  next_target_weight: string;
-  is_target_weight_manually_edited?: boolean;
-  superset_id?: string | null;
-  superset_order?: number;
-  sets: SetData[];
-};
+const KEEP_AWAKE_TAG = 'active-workout';
 
 export default function ActiveWorkoutScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const [loading, setLoading] = useState(true);
-  const [activeRoutine, setActiveRoutine] = useState<any>(null);
-  const [activeDayName, setActiveDayName] = useState('Workout');
-  const [activeDayId, setActiveDayId] = useState<string | null>(null);
-  const [workoutExercises, setWorkoutExercises] = useState<WorkoutExerciseItem[]>([]);
-  const [startTime] = useState<number>(Date.now());
-
-  // Rest Timer State
+  const [, setClockTick] = useState(0);
   const [timerSeconds, setTimerSeconds] = useState<number | null>(null);
-  const [timerActive, setTimerActive] = useState(false);
-  const timerIntervalRef = useRef<any>(null);
+  const didInitRef = useRef(false);
 
-  // Timer Tick Engine
+  const draft = useActiveWorkoutStore((s) => s.draft);
+  const hasHydrated = useActiveWorkoutStore((s) => s._hasHydrated);
+  const initializeDraft = useActiveWorkoutStore((s) => s.initializeDraft);
+  const updateWorkoutExercises = useActiveWorkoutStore((s) => s.updateWorkoutExercises);
+  const setRestTimer = useActiveWorkoutStore((s) => s.setRestTimer);
+  const markPendingSync = useActiveWorkoutStore((s) => s.markPendingSync);
+  const clearActiveWorkout = useActiveWorkoutStore((s) => s.clearActiveWorkout);
+
+  const defaultRestSeconds = usePreferencesStore((s) => s.defaultRestSeconds);
+  const hapticsEnabled = usePreferencesStore((s) => s.hapticsEnabled);
+
+  const workoutExercises = draft?.workoutExercises ?? [];
+  const restTimerEndTimestamp = draft?.restTimerEndTimestamp ?? null;
+  const restTimerTotalSeconds = draft?.restTimerTotalSeconds ?? null;
+  const startedAtTimestamp = draft?.startedAtTimestamp ?? Date.now();
+  const routineName = draft?.routineName || 'Routine';
+  const dayNumber = draft?.dayNumber || 1;
+  const activeDayName = draft?.dayName || `Day ${dayNumber}`;
+
+  // 1. Keep screen awake while workout is open (Expo SDK 57 API + safe web guard)
   useEffect(() => {
-    if (timerActive && timerSeconds !== null && timerSeconds > 0) {
-      timerIntervalRef.current = setInterval(() => {
-        setTimerSeconds((prev) => (prev !== null && prev > 0 ? prev - 1 : 0));
-      }, 1000);
-    } else if (timerSeconds === 0) {
-      setTimerActive(false);
+    let isMounted = true;
+
+    const enableKeepAwake = async () => {
       try {
-        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      } catch (e) {}
-    }
-    return () => clearInterval(timerIntervalRef.current);
-  }, [timerActive, timerSeconds]);
+        const available = await KeepAwake.isAvailableAsync();
+        if (available && isMounted) {
+          await KeepAwake.activateKeepAwakeAsync(KEEP_AWAKE_TAG);
+        }
+      } catch {
+        // Ignore WakeLock errors on unsupported browsers or hidden tabs
+      }
+    };
 
-  // Load Active Routine & Split Day Exercises
-  useEffect(() => {
-    loadActiveWorkout();
+    enableKeepAwake();
+
+    const appStateSub = AppState.addEventListener('change', (nextState) => {
+      if (nextState === 'active') {
+        enableKeepAwake();
+      }
+    });
+
+    return () => {
+      isMounted = false;
+      appStateSub.remove();
+      KeepAwake.deactivateKeepAwake(KEEP_AWAKE_TAG).catch(() => {});
+    };
   }, []);
+
+  // 2. Wall-clock countdown timer + foreground AppState reconciliation (zero drift)
+  useEffect(() => {
+    if (!restTimerEndTimestamp) {
+      setTimerSeconds(null);
+      return;
+    }
+
+    const syncTimer = (): boolean => {
+      const now = Date.now();
+      const remaining = Math.max(0, Math.ceil((restTimerEndTimestamp - now) / 1000));
+      setTimerSeconds(remaining);
+
+      if (remaining === 0) {
+        const expiredAgoMs = now - restTimerEndTimestamp;
+        setRestTimer(null, null);
+        if (hapticsEnabled && expiredAgoMs < 5000) {
+          try {
+            Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+          } catch {}
+        }
+        return true;
+      }
+      return false;
+    };
+
+    if (syncTimer()) {
+      return;
+    }
+
+    const intervalId = setInterval(() => {
+      if (syncTimer()) {
+        clearInterval(intervalId);
+      }
+    }, 500);
+
+    const appStateSub = AppState.addEventListener('change', (nextState) => {
+      if (nextState === 'active') {
+        syncTimer();
+      }
+    });
+
+    return () => {
+      clearInterval(intervalId);
+      appStateSub.remove();
+    };
+  }, [restTimerEndTimestamp, hapticsEnabled, setRestTimer]);
+
+  // 3. Periodic UI refresh for live elapsed density indicator
+  useEffect(() => {
+    const id = setInterval(() => {
+      setClockTick((t) => t + 1);
+    }, 15000);
+    return () => clearInterval(id);
+  }, []);
+
+  // 4. Hydrate from AsyncStorage draft or initialize from active routine
+  useEffect(() => {
+    if (!hasHydrated || didInitRef.current) return;
+    didInitRef.current = true;
+    loadActiveWorkout();
+  }, [hasHydrated]);
 
   const loadActiveWorkout = async () => {
     setLoading(true);
-    const { data: { session } } = await supabase.auth.getSession();
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
     const userId = session?.user?.id;
 
     if (!userId) {
       Alert.alert('Auth Required', 'Please log in to start a workout.');
+      setLoading(false);
       router.back();
       return;
+    }
+
+    // Resume or recover persisted draft belonging to the signed-in user
+    const existingDraft = useActiveWorkoutStore.getState().draft;
+    if (existingDraft && existingDraft.userId === userId) {
+      if (existingDraft.syncStatus === 'pending_sync') {
+        setLoading(false);
+        router.replace('/workout/complete');
+        return;
+      }
+      if (existingDraft.syncStatus === 'in_progress') {
+        setLoading(false);
+        return;
+      }
     }
 
     // 1. Fetch active routine
@@ -102,44 +197,49 @@ export default function ActiveWorkoutScreen() {
 
     if (rErr || !routines || routines.length === 0) {
       Alert.alert('No Active Routine', 'Please create and activate a routine first!');
+      setLoading(false);
       router.back();
       return;
     }
 
     const routine = routines[0];
-    setActiveRoutine(routine);
-
-    // Find current day in split
     const currentDayNum = routine.current_day || 1;
-    const routineDay = routine.routine_days?.find((d: any) => d.day_number === currentDayNum) || routine.routine_days?.[0];
+    const routineDay =
+      routine.routine_days?.find((d: any) => d.day_number === currentDayNum) ||
+      routine.routine_days?.[0];
 
-    if (routineDay) {
-      setActiveDayName(routineDay.name || `Day ${currentDayNum}`);
-      setActiveDayId(routineDay.id || null);
+    if (!routineDay) {
+      Alert.alert('Split Day Missing', 'Could not find exercises for the active routine day.');
+      setLoading(false);
+      router.back();
+      return;
+    }
 
-      const rawExercises = routineDay.routine_exercises || [];
-      // Sort by order_index
-      rawExercises.sort((a: any, b: any) => (a.order_index || 0) - (b.order_index || 0));
+    const rawExercises = routineDay.routine_exercises || [];
+    rawExercises.sort((a: any, b: any) => (a.order_index || 0) - (b.order_index || 0));
 
-      // Query latest completed workout history for each exercise in this day
-      const exerciseIds = rawExercises
-        .map((re: any) => re.exercise_id || re.exercises?.id)
-        .filter(Boolean);
+    const exerciseIds = rawExercises
+      .map((re: any) => re.exercise_id || re.exercises?.id)
+      .filter(Boolean);
 
-      const exerciseHistoryMap: Record<string, {
+    const exerciseHistoryMap: Record<
+      string,
+      {
         nextTargetWeight: number | null;
         nextTargetReps: number | null;
         lastCompletedWeight: number | null;
         lastCompletedReps: number | null;
         maxCompletedWeight: number | null;
         completedSets: Array<{ set_number: number; weight: number | null; reps: number | null }>;
-      }> = {};
+      }
+    > = {};
 
-      if (exerciseIds.length > 0) {
-        try {
-          const { data: pastData, error: pErr } = await supabase
-            .from('session_exercises')
-            .select(`
+    if (exerciseIds.length > 0) {
+      try {
+        const { data: pastData, error: pErr } = await supabase
+          .from('session_exercises')
+          .select(
+            `
               id,
               exercise_id,
               next_target_weight,
@@ -158,172 +258,207 @@ export default function ActiveWorkoutScreen() {
                 reps,
                 is_completed
               )
-            `)
-            .eq('sessions.user_id', userId)
-            .eq('sessions.status', 'completed')
-            .in('exercise_id', exerciseIds);
+            `
+          )
+          .eq('sessions.user_id', userId)
+          .eq('sessions.status', 'completed')
+          .in('exercise_id', exerciseIds);
 
-          if (!pErr && pastData) {
-            // Sort past sessions deterministically: most recently completed first
-            pastData.sort((a: any, b: any) => {
-              const dateA = new Date(a.sessions?.completed_at || a.sessions?.started_at || 0).getTime();
-              const dateB = new Date(b.sessions?.completed_at || b.sessions?.started_at || 0).getTime();
-              return dateB - dateA;
-            });
+        if (!pErr && pastData) {
+          pastData.sort((a: any, b: any) => {
+            const dateA = new Date(a.sessions?.completed_at || a.sessions?.started_at || 0).getTime();
+            const dateB = new Date(b.sessions?.completed_at || b.sessions?.started_at || 0).getTime();
+            return dateB - dateA;
+          });
 
-            for (const row of pastData) {
-              const exId = row.exercise_id;
-              // Because rows are sorted by completed_at descending, take the most recent session for each exercise
-              if (!exerciseHistoryMap[exId]) {
-                const validSets = (row.session_sets || [])
-                  .filter((s: any) => s.is_completed)
-                  .sort((a: any, b: any) => (a.set_number || 0) - (b.set_number || 0));
+          for (const row of pastData) {
+            const exId = row.exercise_id;
+            if (!exerciseHistoryMap[exId]) {
+              const validSets = (row.session_sets || [])
+                .filter((s: any) => s.is_completed)
+                .sort((a: any, b: any) => (a.set_number || 0) - (b.set_number || 0));
 
-                const completedSetsList = validSets.map((s: any) => ({
-                  set_number: s.set_number,
-                  weight: s.weight !== null && s.weight !== undefined ? Number(s.weight) : null,
-                  reps: s.reps !== null && s.reps !== undefined ? Number(s.reps) : null,
-                }));
+              const completedSetsList = validSets.map((s: any) => ({
+                set_number: s.set_number,
+                weight: s.weight !== null && s.weight !== undefined ? Number(s.weight) : null,
+                reps: s.reps !== null && s.reps !== undefined ? Number(s.reps) : null,
+              }));
 
-                const lastCompleted = completedSetsList[completedSetsList.length - 1];
-                const validWeights = completedSetsList
-                  .map((s: any) => s.weight)
-                  .filter((w: any): w is number => w !== null && !isNaN(w));
-                const maxCompletedW = validWeights.length > 0 ? Math.max(...validWeights) : null;
+              const lastCompleted = completedSetsList[completedSetsList.length - 1];
+              const validWeights = completedSetsList
+                .map((s: any) => s.weight)
+                .filter((w: any): w is number => w !== null && !isNaN(w));
+              const maxCompletedW = validWeights.length > 0 ? Math.max(...validWeights) : null;
 
-                exerciseHistoryMap[exId] = {
-                  nextTargetWeight: row.next_target_weight !== null && row.next_target_weight !== undefined ? Number(row.next_target_weight) : null,
-                  nextTargetReps: row.next_target_reps !== null && row.next_target_reps !== undefined ? Number(row.next_target_reps) : null,
-                  lastCompletedWeight: lastCompleted?.weight ?? null,
-                  lastCompletedReps: lastCompleted?.reps ?? null,
-                  maxCompletedWeight: maxCompletedW,
-                  completedSets: completedSetsList
-                };
-              }
+              exerciseHistoryMap[exId] = {
+                nextTargetWeight:
+                  row.next_target_weight !== null && row.next_target_weight !== undefined
+                    ? Number(row.next_target_weight)
+                    : null,
+                nextTargetReps:
+                  row.next_target_reps !== null && row.next_target_reps !== undefined
+                    ? Number(row.next_target_reps)
+                    : null,
+                lastCompletedWeight: lastCompleted?.weight ?? null,
+                lastCompletedReps: lastCompleted?.reps ?? null,
+                maxCompletedWeight: maxCompletedW,
+                completedSets: completedSetsList,
+              };
             }
           }
-        } catch (err) {
-          console.warn('Error fetching exercise history:', err);
+        }
+      } catch (err) {
+        console.warn('Error fetching exercise history:', err);
+      }
+    }
+
+    const fallbackRest = usePreferencesStore.getState().defaultRestSeconds || 90;
+
+    const items: ActiveWorkoutExercise[] = rawExercises.map((re: any) => {
+      const exObj = re.exercises || {};
+      const exId = exObj.id || re.exercise_id;
+      const isBw = exObj.is_bodyweight_only || false;
+      const plannedSetsCount = re.planned_sets || 3;
+      const history = exerciseHistoryMap[exId];
+
+      let baseWeight: string;
+      let baseReps: string;
+      let exPrevPerfSummary: string = '—';
+
+      if (history && (history.nextTargetWeight !== null || history.completedSets.length > 0)) {
+        const firstSet = history.completedSets[0];
+        const lastSet = history.completedSets[history.completedSets.length - 1];
+
+        if (isBw) {
+          baseWeight = '0';
+          baseReps =
+            history.nextTargetReps !== null
+              ? history.nextTargetReps.toString()
+              : lastSet?.reps?.toString() ||
+                firstSet?.reps?.toString() ||
+                re.target_reps?.toString() ||
+                '10';
+          exPrevPerfSummary =
+            lastSet?.reps !== undefined && lastSet?.reps !== null
+              ? `BW × ${lastSet.reps}`
+              : firstSet?.reps !== undefined && firstSet?.reps !== null
+              ? `BW × ${firstSet.reps}`
+              : 'BW × 10';
+        } else {
+          const resolvedWeight =
+            history.nextTargetWeight !== null
+              ? history.nextTargetWeight
+              : history.lastCompletedWeight ?? history.maxCompletedWeight ?? firstSet?.weight;
+
+          if (resolvedWeight !== null && resolvedWeight !== undefined) {
+            baseWeight = resolvedWeight.toString();
+          } else {
+            baseWeight = re.target_weight ? re.target_weight.toString() : '135';
+          }
+
+          baseReps =
+            history.nextTargetReps !== null
+              ? history.nextTargetReps.toString()
+              : lastSet?.reps?.toString() ||
+                firstSet?.reps?.toString() ||
+                re.target_reps?.toString() ||
+                '10';
+
+          if (lastSet && lastSet.weight !== null && lastSet.reps !== null) {
+            exPrevPerfSummary = `${lastSet.weight} lbs × ${lastSet.reps}`;
+          } else if (firstSet && firstSet.weight !== null && firstSet.reps !== null) {
+            exPrevPerfSummary = `${firstSet.weight} lbs × ${firstSet.reps}`;
+          } else if (re.target_weight) {
+            exPrevPerfSummary = `${re.target_weight} lbs × ${re.target_reps || 10}`;
+          }
+        }
+      } else {
+        if (isBw) {
+          baseWeight = '0';
+          baseReps = re.target_reps ? re.target_reps.toString() : '10';
+          exPrevPerfSummary = '—';
+        } else {
+          baseWeight = re.target_weight ? re.target_weight.toString() : '135';
+          baseReps = re.target_reps ? re.target_reps.toString() : '10';
+          exPrevPerfSummary = re.target_weight ? `${re.target_weight} lbs × ${re.target_reps || 10}` : '—';
         }
       }
 
-      const items: WorkoutExerciseItem[] = rawExercises.map((re: any) => {
-        const exObj = re.exercises || {};
-        const exId = exObj.id || re.exercise_id;
-        const isBw = exObj.is_bodyweight_only || false;
-        const plannedSetsCount = re.planned_sets || 3;
-        const history = exerciseHistoryMap[exId];
+      const initialSets: ActiveWorkoutSet[] = [];
+      for (let i = 1; i <= plannedSetsCount; i++) {
+        const prevSetData = history?.completedSets?.[i - 1];
+        const setWeight = baseWeight;
+        let setReps = baseReps;
+        let setPrevPerf = exPrevPerfSummary;
 
-        // Determine baseline weight & reps from most recent session or fallback to routine configuration
-        let baseWeight: string;
-        let baseReps: string;
-        let exPrevPerfSummary: string = '—';
-
-        if (history && (history.nextTargetWeight !== null || history.completedSets.length > 0)) {
-          const firstSet = history.completedSets[0];
-          const lastSet = history.completedSets[history.completedSets.length - 1];
-
+        if (prevSetData) {
           if (isBw) {
-            baseWeight = '0';
-            baseReps = history.nextTargetReps !== null
-              ? history.nextTargetReps.toString()
-              : (lastSet?.reps?.toString() || firstSet?.reps?.toString() || re.target_reps?.toString() || '10');
-            exPrevPerfSummary = lastSet?.reps !== undefined && lastSet?.reps !== null
-              ? `BW × ${lastSet.reps}`
-              : (firstSet?.reps !== undefined && firstSet?.reps !== null ? `BW × ${firstSet.reps}` : 'BW × 10');
-          } else {
-            // Prioritize: explicit next target weight -> last completed set weight -> max completed set weight -> first set weight -> routine target weight -> 135
-            const resolvedWeight = history.nextTargetWeight !== null
-              ? history.nextTargetWeight
-              : (history.lastCompletedWeight ?? history.maxCompletedWeight ?? firstSet?.weight);
-
-            if (resolvedWeight !== null && resolvedWeight !== undefined) {
-              baseWeight = resolvedWeight.toString();
-            } else {
-              baseWeight = re.target_weight ? re.target_weight.toString() : '135';
+            if (prevSetData.reps !== null && prevSetData.reps !== undefined) {
+              setReps = prevSetData.reps.toString();
+              setPrevPerf = `BW × ${prevSetData.reps}`;
             }
-
-            baseReps = history.nextTargetReps !== null
-              ? history.nextTargetReps.toString()
-              : (lastSet?.reps?.toString() || firstSet?.reps?.toString() || re.target_reps?.toString() || '10');
-
-            if (lastSet && lastSet.weight !== null && lastSet.reps !== null) {
-              exPrevPerfSummary = `${lastSet.weight} lbs × ${lastSet.reps}`;
-            } else if (firstSet && firstSet.weight !== null && firstSet.reps !== null) {
-              exPrevPerfSummary = `${firstSet.weight} lbs × ${firstSet.reps}`;
-            } else if (re.target_weight) {
-              exPrevPerfSummary = `${re.target_weight} lbs × ${re.target_reps || 10}`;
-            }
-          }
-        } else {
-          // First time doing this exercise
-          if (isBw) {
-            baseWeight = '0';
-            baseReps = re.target_reps ? re.target_reps.toString() : '10';
-            exPrevPerfSummary = '—';
           } else {
-            baseWeight = re.target_weight ? re.target_weight.toString() : '135';
-            baseReps = re.target_reps ? re.target_reps.toString() : '10';
-            exPrevPerfSummary = re.target_weight ? `${re.target_weight} lbs × ${re.target_reps || 10}` : '—';
+            if (prevSetData.reps !== null && prevSetData.reps !== undefined) {
+              setReps = prevSetData.reps.toString();
+            }
+            if (
+              prevSetData.weight !== null &&
+              prevSetData.weight !== undefined &&
+              prevSetData.reps !== null &&
+              prevSetData.reps !== undefined
+            ) {
+              setPrevPerf = `${prevSetData.weight} lbs × ${prevSetData.reps}`;
+            }
           }
         }
 
-        // Construct initial sets with set-specific previous performance if available
-        const initialSets: SetData[] = [];
-        for (let i = 1; i <= plannedSetsCount; i++) {
-          const prevSetData = history?.completedSets?.[i - 1];
-          let setWeight = baseWeight;
-          let setReps = baseReps;
-          let setPrevPerf = exPrevPerfSummary;
+        initialSets.push({
+          set_number: i,
+          weight: setWeight,
+          reps: setReps,
+          prev_performance: setPrevPerf,
+          is_completed: false,
+        });
+      }
 
-          if (prevSetData) {
-            if (isBw) {
-              if (prevSetData.reps !== null && prevSetData.reps !== undefined) {
-                setReps = prevSetData.reps.toString();
-                setPrevPerf = `BW × ${prevSetData.reps}`;
-              }
-            } else {
-              // Editable input for each set starts at baseWeight (the final top weight achieved, 20 lbs)
-              // But ghost text shows exactly what was done for this specific set
-              if (prevSetData.reps !== null && prevSetData.reps !== undefined) {
-                setReps = prevSetData.reps.toString();
-              }
-              if (prevSetData.weight !== null && prevSetData.weight !== undefined && prevSetData.reps !== null && prevSetData.reps !== undefined) {
-                setPrevPerf = `${prevSetData.weight} lbs × ${prevSetData.reps}`;
-              }
-            }
-          }
+      return {
+        routine_exercise_id: re.id,
+        exercise_id: exId,
+        name: exObj.name || 'Exercise',
+        default_rest_timer_seconds: exObj.default_rest_timer_seconds || fallbackRest,
+        is_bodyweight_only: isBw,
+        prev_performance: exPrevPerfSummary,
+        next_target_weight: baseWeight,
+        is_target_weight_manually_edited: false,
+        superset_id: re.superset_id || null,
+        superset_order: re.superset_order || 1,
+        sets: initialSets,
+      };
+    });
 
-          initialSets.push({
-            set_number: i,
-            weight: setWeight,
-            reps: setReps,
-            prev_performance: setPrevPerf,
-            is_completed: false
-          });
-        }
+    initializeDraft({
+      userId,
+      routineId: routine.id,
+      routineName: routine.name || 'Routine',
+      routineDayId: routineDay.id || null,
+      dayNumber: currentDayNum,
+      dayName: routineDay.name || `Day ${currentDayNum}`,
+      cycleNumber: routine.current_cycle || 1,
+      daysInSplit: routine.days_in_split || 3,
+      cyclesPerRoutine: routine.cycles_per_routine || 4,
+      startedAtTimestamp: Date.now(),
+      durationSeconds: 0,
+      workoutExercises: items,
+      restTimerEndTimestamp: null,
+      restTimerTotalSeconds: null,
+      syncStatus: 'in_progress',
+      savedSessionId: null,
+    });
 
-        return {
-          routine_exercise_id: re.id,
-          exercise_id: exId,
-          name: exObj.name || 'Exercise',
-          default_rest_timer_seconds: exObj.default_rest_timer_seconds || 90,
-          is_bodyweight_only: isBw,
-          prev_performance: exPrevPerfSummary,
-          next_target_weight: baseWeight,
-          is_target_weight_manually_edited: false,
-          superset_id: re.superset_id || null,
-          superset_order: re.superset_order || 1,
-          sets: initialSets
-        };
-      });
-
-      setWorkoutExercises(items);
-    }
     setLoading(false);
   };
 
-  // Toggle Set Complete & Trigger Smart Rest Timer
+  // Toggle Set Complete & Trigger Smart Rest Timer (preserving exact superset round-timer gating)
   const handleToggleSetComplete = (exIdx: number, setIdx: number) => {
     const targetEx = workoutExercises[exIdx];
     if (!targetEx || !targetEx.sets[setIdx]) return;
@@ -331,8 +466,15 @@ export default function ActiveWorkoutScreen() {
     const willBeCompleted = !targetEx.sets[setIdx].is_completed;
     let durationToSet: number | null = null;
     let cancelTimer = false;
+    const fallbackRest = defaultRestSeconds || 90;
 
     if (willBeCompleted) {
+      if (targetEx.superset_id && hapticsEnabled) {
+        try {
+          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+        } catch {}
+      }
+
       if (targetEx.superset_id) {
         const supersetGroup = workoutExercises.filter((e) => e.superset_id === targetEx.superset_id);
         const isRoundComplete =
@@ -343,17 +485,17 @@ export default function ActiveWorkoutScreen() {
 
         if (isRoundComplete) {
           durationToSet = Math.max(
-            ...supersetGroup.map((e) => e.default_rest_timer_seconds || 90)
+            ...supersetGroup.map((e) => e.default_rest_timer_seconds || fallbackRest)
           );
         } else {
           cancelTimer = true;
         }
       } else {
-        durationToSet = targetEx.default_rest_timer_seconds || 90;
+        durationToSet = targetEx.default_rest_timer_seconds || fallbackRest;
       }
     }
 
-    setWorkoutExercises((prev) => {
+    updateWorkoutExercises((prev) => {
       return prev.map((ex, i) => {
         if (i !== exIdx) return ex;
 
@@ -375,23 +517,21 @@ export default function ActiveWorkoutScreen() {
         return {
           ...ex,
           sets: nextSets,
-          next_target_weight: nextTarget
+          next_target_weight: nextTarget,
         };
       });
     });
 
     if (durationToSet !== null) {
-      setTimerSeconds(durationToSet);
-      setTimerActive(true);
+      setRestTimer(Date.now() + durationToSet * 1000, durationToSet);
     } else if (cancelTimer) {
-      setTimerActive(false);
-      setTimerSeconds(null);
+      setRestTimer(null, null);
     }
   };
 
   // Set Cloning Engine (Editing Set 1 auto-fills subsequent sets if uncompleted)
   const handleChangeWeight = (exIdx: number, setIdx: number, val: string) => {
-    setWorkoutExercises((prev) => {
+    updateWorkoutExercises((prev) => {
       return prev.map((ex, i) => {
         if (i !== exIdx) return ex;
 
@@ -422,14 +562,14 @@ export default function ActiveWorkoutScreen() {
         return {
           ...ex,
           sets: nextSets,
-          next_target_weight: nextTarget
+          next_target_weight: nextTarget,
         };
       });
     });
   };
 
   const handleChangeReps = (exIdx: number, setIdx: number, val: string) => {
-    setWorkoutExercises((prev) => {
+    updateWorkoutExercises((prev) => {
       return prev.map((ex, i) => {
         if (i !== exIdx) return ex;
 
@@ -446,20 +586,20 @@ export default function ActiveWorkoutScreen() {
 
         return {
           ...ex,
-          sets: nextSets
+          sets: nextSets,
         };
       });
     });
   };
 
   const handleChangeNextTarget = (exIdx: number, val: string) => {
-    setWorkoutExercises((prev) => {
+    updateWorkoutExercises((prev) => {
       return prev.map((ex, i) => {
         if (i !== exIdx) return ex;
         return {
           ...ex,
           next_target_weight: val,
-          is_target_weight_manually_edited: true
+          is_target_weight_manually_edited: true,
         };
       });
     });
@@ -467,7 +607,7 @@ export default function ActiveWorkoutScreen() {
 
   // Add extra set to exercise
   const handleAddSet = (exIdx: number) => {
-    setWorkoutExercises((prev) => {
+    updateWorkoutExercises((prev) => {
       return prev.map((ex, i) => {
         if (i !== exIdx) return ex;
         const currentSets = ex.sets;
@@ -480,12 +620,12 @@ export default function ActiveWorkoutScreen() {
             ...currentSets,
             {
               set_number: newSetNumber,
-              weight: lastSet ? lastSet.weight : (ex.is_bodyweight_only ? '0' : '135'),
+              weight: lastSet ? lastSet.weight : ex.is_bodyweight_only ? '0' : '135',
               reps: lastSet ? lastSet.reps : '10',
               prev_performance: ex.prev_performance || '—',
-              is_completed: false
-            }
-          ]
+              is_completed: false,
+            },
+          ],
         };
       });
     });
@@ -493,7 +633,7 @@ export default function ActiveWorkoutScreen() {
 
   // Add round to all exercises in a superset
   const handleAddSupersetRound = (supersetId: string) => {
-    setWorkoutExercises((prev) => {
+    updateWorkoutExercises((prev) => {
       return prev.map((ex) => {
         if (ex.superset_id !== supersetId) return ex;
         const currentSets = ex.sets;
@@ -506,49 +646,39 @@ export default function ActiveWorkoutScreen() {
             ...currentSets,
             {
               set_number: newSetNumber,
-              weight: lastSet ? lastSet.weight : (ex.is_bodyweight_only ? '0' : '135'),
+              weight: lastSet ? lastSet.weight : ex.is_bodyweight_only ? '0' : '135',
               reps: lastSet ? lastSet.reps : '10',
               prev_performance: ex.prev_performance || '—',
-              is_completed: false
-            }
-          ]
+              is_completed: false,
+            },
+          ],
         };
       });
     });
   };
 
-  // Finish Workout Action
+  // Finish Workout Action (transitions Zustand draft to pending_sync and hands off without URL JSON params)
   const handleFinishWorkout = () => {
-    // Check if at least 1 set is completed
     const completedCount = workoutExercises.reduce(
       (acc, ex) => acc + ex.sets.filter((s) => s.is_completed).length,
       0
     );
 
     if (completedCount === 0) {
-      Alert.alert('No Sets Logged', 'Please complete at least 1 set before finishing.');
+      if (Platform.OS === 'web') {
+        window.alert('No Sets Logged: Please complete at least 1 set before finishing.');
+      } else {
+        Alert.alert('No Sets Logged', 'Please complete at least 1 set before finishing.');
+      }
       return;
     }
 
-    const durationSeconds = Math.max(Math.round((Date.now() - startTime) / 1000), 60);
-
-    // Navigate to completion summary with workout payload
-    router.replace({
-      pathname: '/workout/complete',
-      params: {
-        routine_id: activeRoutine.id,
-        routine_day_id: activeDayId || '',
-        current_day: activeRoutine.current_day,
-        current_cycle: activeRoutine.current_cycle,
-        days_in_split: activeRoutine.days_in_split,
-        cycles_per_routine: activeRoutine.cycles_per_routine,
-        duration_seconds: durationSeconds.toString(),
-        payload: JSON.stringify(workoutExercises)
-      }
-    });
+    const durationSeconds = Math.max(Math.round((Date.now() - startedAtTimestamp) / 1000), 60);
+    markPendingSync(durationSeconds);
+    router.replace('/workout/complete');
   };
 
-  if (loading) {
+  if (loading || !hasHydrated) {
     return (
       <View className="flex-1 bg-slate-950 justify-center items-center">
         <ActivityIndicator size="large" color="#3b82f6" />
@@ -567,6 +697,7 @@ export default function ActiveWorkoutScreen() {
 
   const handleCloseWorkout = () => {
     const exitWorkout = () => {
+      clearActiveWorkout();
       if (router.canGoBack()) {
         router.back();
       } else {
@@ -604,7 +735,7 @@ export default function ActiveWorkoutScreen() {
     });
   });
 
-  const elapsedSecs = Math.max(Math.round((Date.now() - startTime) / 1000), 1);
+  const elapsedSecs = Math.max(Math.round((Date.now() - startedAtTimestamp) / 1000), 1);
   const elapsedMins = Math.max(Math.round(elapsedSecs / 60), 1);
   const liveDensity = elapsedMins > 0 ? Math.round(liveTonnage / elapsedMins) : 0;
 
@@ -620,7 +751,7 @@ export default function ActiveWorkoutScreen() {
             Best Damn Workout Tracker Ever
           </Text>
           <Text className="text-slate-400 font-semibold text-xs uppercase tracking-wider">
-            {activeRoutine?.name} • Day {activeRoutine?.current_day}
+            {routineName} • Day {dayNumber}
           </Text>
           <Text className="text-white text-2xl font-bold">{activeDayName}</Text>
         </View>
@@ -1085,7 +1216,12 @@ export default function ActiveWorkoutScreen() {
 
           <View className="flex-row gap-2">
             <TouchableOpacity
-              onPress={() => setTimerSeconds((t) => (t !== null ? t + 30 : 30))}
+              onPress={() => {
+                const baseEnd = restTimerEndTimestamp ?? Date.now();
+                const newEnd = Math.max(Date.now(), baseEnd) + 30 * 1000;
+                const newTotal = (restTimerTotalSeconds ?? timerSeconds ?? 0) + 30;
+                setRestTimer(newEnd, newTotal);
+              }}
               className="bg-slate-800 px-3 py-2 rounded-xl border border-slate-700 flex-row items-center"
             >
               <Plus color="#a78bfa" size={14} className="mr-1" />
@@ -1094,7 +1230,7 @@ export default function ActiveWorkoutScreen() {
 
             <TouchableOpacity
               onPress={() => {
-                setTimerActive(false);
+                setRestTimer(null, null);
                 setTimerSeconds(null);
               }}
               className="bg-slate-800 px-3 py-2 rounded-xl border border-slate-700 flex-row items-center"

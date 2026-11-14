@@ -433,11 +433,19 @@ export function getMuscleGroupVolumeStatusList(
 export function analyzeCycleProgression(
   sessions: any[],
   routineId: string,
-  dayNumber: number
+  dayNumber: number,
+  options?: { routineDayId?: string | null; dayName?: string }
 ): CycleComparison | null {
-  const matchingSessions = sessions.filter(
-    (s) => s.routine_id === routineId && (s.day_order === dayNumber || s.routine_day_id)
-  );
+  const matchingSessions = sessions.filter((s) => {
+    if (s.routine_id !== routineId) return false;
+    if (options?.routineDayId && s.routine_day_id) {
+      return s.routine_day_id === options.routineDayId;
+    }
+    if (s.routine_days?.day_number !== undefined && s.routine_days?.day_number !== null) {
+      return Number(s.routine_days.day_number) === dayNumber;
+    }
+    return s.day_order === dayNumber;
+  });
 
   if (matchingSessions.length === 0) return null;
 
@@ -446,6 +454,8 @@ export function analyzeCycleProgression(
   );
 
   const routineName = sortedSessions[0]?.routines?.name || 'Split Day';
+  const resolvedDayName =
+    options?.dayName || sortedSessions[0]?.routine_days?.name || `Day ${dayNumber}`;
 
   const cycles = sortedSessions.map((s) => {
     let totalVolume = 0;
@@ -517,7 +527,7 @@ export function analyzeCycleProgression(
     routineId,
     routineName,
     dayNumber,
-    dayName: `Day ${dayNumber}`,
+    dayName: resolvedDayName,
     cycles,
   };
 }

@@ -1,20 +1,17 @@
 import { useState, useEffect, useRef } from 'react';
-import { View, Text, TouchableOpacity, ScrollView, ActivityIndicator, Alert } from 'react-native';
+import { View, Text, TouchableOpacity, ScrollView, ActivityIndicator } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { supabase } from '../../src/lib/supabase';
+import { useActiveWorkoutStore } from '../../src/store/useActiveWorkoutStore';
 import { Trophy, Flame, Dumbbell, Clock, ArrowRight, CheckCircle, AlertCircle, RefreshCw } from 'lucide-react-native';
 
 export default function WorkoutCompleteScreen() {
   const router = useRouter();
   const params = useLocalSearchParams();
 
-  const routineId = params.routine_id as string;
-  const routineDayId = (params.routine_day_id as string) || null;
-  const currentDay = parseInt(params.current_day as string, 10) || 1;
-  const currentCycle = parseInt(params.current_cycle as string, 10) || 1;
-  const daysInSplit = parseInt(params.days_in_split as string, 10) || 3;
-  const cyclesPerRoutine = parseInt(params.cycles_per_routine as string, 10) || 4;
-  const durationSeconds = parseInt(params.duration_seconds as string, 10) || 1800;
+  const hasHydrated = useActiveWorkoutStore((s) => s._hasHydrated);
+  const setSavedSessionId = useActiveWorkoutStore((s) => s.setSavedSessionId);
+  const clearActiveWorkout = useActiveWorkoutStore((s) => s.clearActiveWorkout);
 
   const [saving, setSaving] = useState(true);
   const [saved, setSaved] = useState(false);
@@ -22,15 +19,21 @@ export default function WorkoutCompleteScreen() {
   const [stats, setStats] = useState({
     totalVolume: 0,
     totalSets: 0,
-    totalExercises: 0
+    totalExercises: 0,
+    durationSeconds: parseInt(params.duration_seconds as string, 10) || 1800,
+    currentDay: parseInt(params.current_day as string, 10) || 1,
+    daysInSplit: parseInt(params.days_in_split as string, 10) || 3,
   });
 
+  const didAttemptSaveRef = useRef(false);
   const isSavingRef = useRef(false);
   const savedSessionIdRef = useRef<string | null>(null);
 
   useEffect(() => {
+    if (!hasHydrated || didAttemptSaveRef.current) return;
+    didAttemptSaveRef.current = true;
     saveWorkoutSession();
-  }, []);
+  }, [hasHydrated]);
 
   const saveWorkoutSession = async () => {
     if (isSavingRef.current) return;
@@ -40,20 +43,50 @@ export default function WorkoutCompleteScreen() {
       setSaving(true);
       setSaveError(null);
 
-      const { data: { session: authSession } } = await supabase.auth.getSession();
+      const {
+        data: { session: authSession },
+      } = await supabase.auth.getSession();
       const userId = authSession?.user?.id;
 
       if (!userId) {
-        setSaving(false);
         setSaveError('User authentication session expired. Please log in again.');
         return;
       }
 
-      const workoutPayload = params.payload ? JSON.parse(params.payload as string) : [];
+      const storeDraft = useActiveWorkoutStore.getState().draft;
+      const hasMatchingDraft = Boolean(storeDraft && storeDraft.userId === userId);
+
+      const routineId = hasMatchingDraft
+        ? storeDraft!.routineId
+        : (params.routine_id as string);
+      const routineDayId = hasMatchingDraft
+        ? storeDraft!.routineDayId
+        : (params.routine_day_id as string) || null;
+      const currentDay = hasMatchingDraft
+        ? storeDraft!.dayNumber
+        : parseInt(params.current_day as string, 10) || 1;
+      const currentCycle = hasMatchingDraft
+        ? storeDraft!.cycleNumber
+        : parseInt(params.current_cycle as string, 10) || 1;
+      const daysInSplit = hasMatchingDraft
+        ? storeDraft!.daysInSplit
+        : parseInt(params.days_in_split as string, 10) || 3;
+      const durationSeconds = hasMatchingDraft
+        ? storeDraft!.durationSeconds || 60
+        : parseInt(params.duration_seconds as string, 10) || 1800;
+      const startedAtIso = hasMatchingDraft
+        ? new Date(storeDraft!.startedAtTimestamp).toISOString()
+        : new Date(Date.now() - durationSeconds * 1000).toISOString();
+
+      const workoutPayload = hasMatchingDraft
+        ? storeDraft!.workoutExercises
+        : params.payload
+        ? JSON.parse(params.payload as string)
+        : [];
 
       let volumeSum = 0;
       let completedSetsSum = 0;
-      let exerciseCount = workoutPayload.length;
+      const exerciseCount = workoutPayload.length;
 
       workoutPayload.forEach((ex: any) => {
         ex.sets?.forEach((s: any) => {
@@ -69,11 +102,20 @@ export default function WorkoutCompleteScreen() {
       setStats({
         totalVolume: Math.round(volumeSum),
         totalSets: completedSetsSum,
-        totalExercises: exerciseCount
+        totalExercises: exerciseCount,
+        durationSeconds,
+        currentDay,
+        daysInSplit,
       });
 
-      // 1. Resolve Session ID (idempotent across retries and mount cycles)
-      let sessionId = savedSessionIdRef.current;
+      if (!routineId || workoutPayload.length === 0) {
+        setSaveError('No unsaved workout data found to sync.');
+        return;
+      }
+
+      // 1. Resolve Session ID (idempotent across retries and app restarts)
+      let sessionId =
+        savedSessionIdRef.current || (hasMatchingDraft ? storeDraft!.savedSessionId || null : null);
 
       if (!sessionId) {
         if (routineId && routineDayId) {
@@ -90,6 +132,7 @@ export default function WorkoutCompleteScreen() {
           if (existingSession?.id) {
             sessionId = existingSession.id;
             savedSessionIdRef.current = sessionId;
+            if (hasMatchingDraft) setSavedSessionId(sessionId);
           }
         }
 
@@ -99,9 +142,9 @@ export default function WorkoutCompleteScreen() {
             routine_id: routineId,
             cycle_number: currentCycle,
             status: 'completed',
-            started_at: new Date(Date.now() - durationSeconds * 1000).toISOString(),
+            started_at: startedAtIso,
             completed_at: new Date().toISOString(),
-            duration_seconds: durationSeconds
+            duration_seconds: durationSeconds,
           };
 
           if (routineDayId) {
@@ -117,6 +160,7 @@ export default function WorkoutCompleteScreen() {
           if (sessionErr || !sessionData) throw sessionErr || new Error('Failed to create session');
           sessionId = sessionData.id;
           savedSessionIdRef.current = sessionId;
+          if (hasMatchingDraft) setSavedSessionId(sessionId);
         }
       }
 
@@ -138,7 +182,6 @@ export default function WorkoutCompleteScreen() {
 
       // 2. Insert Session Exercises & Sets
       for (const ex of workoutPayload) {
-        // Resolve target weight: prioritize next_target_weight, fallback to highest completed set weight
         let resolvedTargetWeight: number | null = null;
         if (!ex.is_bodyweight_only) {
           const parsed = parseFloat(ex.next_target_weight);
@@ -157,7 +200,6 @@ export default function WorkoutCompleteScreen() {
 
         let seDataFinal: any = null;
 
-        // Check if this exercise was already inserted for this session (idempotent retry)
         const { data: existingSe } = await supabase
           .from('session_exercises')
           .select('id')
@@ -171,25 +213,33 @@ export default function WorkoutCompleteScreen() {
         } else {
           const { data: seData, error: seErr } = await supabase
             .from('session_exercises')
-            .insert([{
-              session_id: sessionId,
-              exercise_id: ex.exercise_id,
-              next_target_weight: resolvedTargetWeight,
-              superset_id: ex.superset_id || null,
-              superset_order: ex.superset_order || 1
-            }])
+            .insert([
+              {
+                session_id: sessionId,
+                exercise_id: ex.exercise_id,
+                next_target_weight: resolvedTargetWeight,
+                superset_id: ex.superset_id || null,
+                superset_order: ex.superset_order || 1,
+              },
+            ])
             .select()
             .single();
 
           if (seErr) {
-            if (seErr.message?.includes('superset_id') || seErr.details?.includes('superset_id') || seErr.message?.includes('schema cache')) {
+            if (
+              seErr.message?.includes('superset_id') ||
+              seErr.details?.includes('superset_id') ||
+              seErr.message?.includes('schema cache')
+            ) {
               const { data: fallbackSeData, error: fallbackSeErr } = await supabase
                 .from('session_exercises')
-                .insert([{
-                  session_id: sessionId,
-                  exercise_id: ex.exercise_id,
-                  next_target_weight: resolvedTargetWeight,
-                }])
+                .insert([
+                  {
+                    session_id: sessionId,
+                    exercise_id: ex.exercise_id,
+                    next_target_weight: resolvedTargetWeight,
+                  },
+                ])
                 .select()
                 .single();
               if (!fallbackSeErr && fallbackSeData) {
@@ -211,15 +261,18 @@ export default function WorkoutCompleteScreen() {
 
         const seId = seDataFinal.id;
 
-        // Clean any previously inserted sets for this session exercise to prevent duplicate sets on retry
-        await supabase.from('session_sets').delete().eq('session_exercise_id', seId);
+        const { error: deleteSetsErr } = await supabase
+          .from('session_sets')
+          .delete()
+          .eq('session_exercise_id', seId);
+        if (deleteSetsErr) throw deleteSetsErr;
 
         const setRows = (ex.sets || []).map((s: any) => ({
           session_exercise_id: seId,
           set_number: s.set_number,
           weight: parseFloat(s.weight) || 0,
           reps: parseInt(s.reps, 10) || 0,
-          is_completed: s.is_completed
+          is_completed: s.is_completed,
         }));
 
         if (setRows.length > 0) {
@@ -227,7 +280,7 @@ export default function WorkoutCompleteScreen() {
           if (setsErr) throw setsErr;
         }
 
-        // Sync target weight back to routine_exercises for persistent routine baseline across the active routine
+        // Sync target weight back to routine_exercises
         if (resolvedTargetWeight !== null && !ex.is_bodyweight_only) {
           if (ex.routine_exercise_id) {
             await supabase
@@ -236,7 +289,6 @@ export default function WorkoutCompleteScreen() {
               .eq('id', ex.routine_exercise_id);
           }
 
-          // Also propagate to other days in this routine that share the same exercise
           if (routineDayIds.length > 0 && ex.exercise_id) {
             try {
               await supabase
@@ -260,20 +312,24 @@ export default function WorkoutCompleteScreen() {
         nextCycle = currentCycle + 1;
       }
 
-      await supabase
+      const { error: routineErr } = await supabase
         .from('routines')
         .update({
           current_day: nextDay,
           current_cycle: nextCycle,
-          updated_at: new Date().toISOString()
+          updated_at: new Date().toISOString(),
         })
         .eq('id', routineId);
 
-      setSaving(false);
+      if (routineErr) throw routineErr;
+
+      // Clear crash-safe active workout store ONLY after all PostgREST writes succeed
+      if (hasMatchingDraft) {
+        clearActiveWorkout();
+      }
       setSaved(true);
     } catch (err: any) {
       console.error('Error saving workout session:', err);
-      setSaving(false);
       setSaved(false);
       setSaveError(err.message || 'An unexpected error occurred while saving your workout.');
     } finally {
@@ -283,7 +339,7 @@ export default function WorkoutCompleteScreen() {
   };
 
   const formatDuration = (secs: number) => {
-    const mins = Math.floor(secs / 60);
+    const mins = Math.max(Math.floor(secs / 60), 1);
     return `${mins} mins`;
   };
 
@@ -309,8 +365,10 @@ export default function WorkoutCompleteScreen() {
             <View className="flex-row items-center flex-1 mr-3">
               <AlertCircle color="#ef4444" size={24} className="mr-3" />
               <View className="flex-1">
-                <Text className="text-red-200 font-bold text-base">Save Failed</Text>
-                <Text className="text-red-300 text-xs mt-0.5" numberOfLines={2}>{saveError}</Text>
+                <Text className="text-red-200 font-bold text-base">Sync Pending</Text>
+                <Text className="text-red-300 text-xs mt-0.5" numberOfLines={3}>
+                  {saveError} Your sets remain saved safely on this device.
+                </Text>
               </View>
             </View>
             <TouchableOpacity
@@ -340,7 +398,7 @@ export default function WorkoutCompleteScreen() {
 
           <View className="flex-1 bg-slate-900 p-4 rounded-2xl border border-slate-800 items-center">
             <Clock color="#a78bfa" size={24} className="mb-2" />
-            <Text className="text-white font-bold text-xl">{formatDuration(durationSeconds)}</Text>
+            <Text className="text-white font-bold text-xl">{formatDuration(stats.durationSeconds)}</Text>
             <Text className="text-slate-500 text-xs font-semibold uppercase mt-0.5">Duration</Text>
           </View>
         </View>
@@ -353,7 +411,7 @@ export default function WorkoutCompleteScreen() {
               <View>
                 <Text className="text-white font-bold text-base">Cycle Advanced</Text>
                 <Text className="text-indigo-200 text-xs mt-0.5">
-                  Next workout: Day {currentDay >= daysInSplit ? 1 : currentDay + 1} of {daysInSplit}
+                  Next workout: Day {stats.currentDay >= stats.daysInSplit ? 1 : stats.currentDay + 1} of {stats.daysInSplit}
                 </Text>
               </View>
             </View>

@@ -3,15 +3,20 @@ import { View, Text, TextInput, TouchableOpacity, ScrollView, Alert, ActivityInd
 import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { supabase } from '../src/lib/supabase';
+import { usePreferencesStore, RestDurationOption } from '../src/store/usePreferencesStore';
 import { X, User, Bell, LogOut, Check, Database } from 'lucide-react-native';
+
+const REST_OPTIONS: readonly RestDurationOption[] = [60, 90, 120, 180];
 
 export default function SettingsScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const [email, setEmail] = useState('');
   const [displayName, setDisplayName] = useState('');
-  const [defaultTimer, setDefaultTimer] = useState(90);
-  const [hapticsEnabled, setHapticsEnabled] = useState(true);
+  const defaultTimer = usePreferencesStore((s) => s.defaultRestSeconds);
+  const setDefaultTimer = usePreferencesStore((s) => s.setDefaultRestSeconds);
+  const hapticsEnabled = usePreferencesStore((s) => s.hapticsEnabled);
+  const setHapticsEnabled = usePreferencesStore((s) => s.setHapticsEnabled);
   const [loading, setLoading] = useState(false);
   const [saved, setSaved] = useState(false);
 
@@ -114,7 +119,7 @@ export default function SettingsScreen() {
 
           <Text className="text-slate-400 text-sm mb-3">Default Rest Duration for New Exercises:</Text>
           <View className="flex-row justify-between mb-4">
-            {[60, 90, 120, 180].map((seconds) => (
+            {REST_OPTIONS.map((seconds) => (
               <TouchableOpacity
                 key={seconds}
                 onPress={() => setDefaultTimer(seconds)}

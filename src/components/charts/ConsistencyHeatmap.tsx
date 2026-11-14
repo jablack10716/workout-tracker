@@ -8,6 +8,13 @@ interface HeatmapDay {
   workoutCount: number;
 }
 
+function toLocalDateKey(date: Date): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
 interface ConsistencyHeatmapProps {
   sessions: any[];
   weeksCount?: number;
@@ -26,7 +33,7 @@ export const ConsistencyHeatmap: React.FC<ConsistencyHeatmapProps> = ({
 
   sessions.forEach((s) => {
     if (!s.started_at) return;
-    const dateKey = new Date(s.started_at).toISOString().split('T')[0];
+    const dateKey = toLocalDateKey(new Date(s.started_at));
 
     let sessionVol = 0;
     (s.session_exercises || []).forEach((se: any) => {
@@ -52,6 +59,7 @@ export const ConsistencyHeatmap: React.FC<ConsistencyHeatmapProps> = ({
   for (let w = weeksCount - 1; w >= 0; w--) {
     const weekDays: HeatmapDay[] = [];
     const refMonday = new Date(now);
+    refMonday.setHours(0, 0, 0, 0);
     refMonday.setDate(refMonday.getDate() - w * 7);
     const day = refMonday.getDay();
     const diff = refMonday.getDate() - (day === 0 ? 6 : day - 1);
@@ -60,7 +68,7 @@ export const ConsistencyHeatmap: React.FC<ConsistencyHeatmapProps> = ({
     for (let d = 0; d < 7; d++) {
       const curDate = new Date(refMonday);
       curDate.setDate(refMonday.getDate() + d);
-      const dateKey = curDate.toISOString().split('T')[0];
+      const dateKey = toLocalDateKey(curDate);
 
       const entry = sessionVolumeByDate[dateKey];
       weekDays.push({

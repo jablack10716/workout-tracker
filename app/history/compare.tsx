@@ -25,13 +25,14 @@ export default function CycleCompareScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
 
-  const routineId = params.routine_id as string;
-  const dayNumber = parseInt(params.day_number as string, 10) || 1;
+  const routineIdParam = (params.routine_id as string) || '';
+  const dayNumberParam = parseInt(params.day_number as string, 10) || 1;
+  const routineDayIdParam = (params.routine_day_id as string) || '';
 
   const [loading, setLoading] = useState(true);
   const [routines, setRoutines] = useState<any[]>([]);
-  const [selectedRoutineId, setSelectedRoutineId] = useState<string>(routineId || '');
-  const [selectedDayNumber, setSelectedDayNumber] = useState<number>(dayNumber);
+  const [selectedRoutineId, setSelectedRoutineId] = useState<string>(routineIdParam);
+  const [selectedDayNumber, setSelectedDayNumber] = useState<number>(dayNumberParam);
   const [comparison, setComparison] = useState<CycleComparison | null>(null);
 
   const loadRoutinesAndComparison = useCallback(async () => {
@@ -42,7 +43,7 @@ export default function CycleCompareScreen() {
     const userId = authSession?.user?.id;
 
     if (userId) {
-      // 1. Fetch all routines
+      // 1. Fetch all routines with split days
       const { data: routineData } = await supabase
         .from('routines')
         .select('*, routine_days(*)')
@@ -51,14 +52,26 @@ export default function CycleCompareScreen() {
 
       if (routineData && routineData.length > 0) {
         setRoutines(routineData);
-        const activeRId = selectedRoutineId || routineData[0].id;
-        setSelectedRoutineId(activeRId);
+        const preferredRoutine =
+          routineData.find((r: any) => r.status === 'active') || routineData[0];
+        const activeRId = selectedRoutineId || preferredRoutine.id;
+        if (selectedRoutineId !== activeRId) {
+          setSelectedRoutineId(activeRId);
+        }
 
-        // 2. Fetch all completed sessions for this routine
+        const activeRoutineObj =
+          routineData.find((r: any) => r.id === activeRId) || preferredRoutine;
+        const matchedDay = activeRoutineObj?.routine_days?.find(
+          (d: any) => Number(d.day_number) === selectedDayNumber
+        );
+        const resolvedDayId =
+          matchedDay?.id || (activeRId === routineIdParam ? routineDayIdParam || null : null);
+
+        // 2. Fetch all completed sessions for this routine including split day metadata
         const { data: sessionData } = await supabase
           .from('sessions')
           .select(
-            '*, routines(name), session_exercises(*, exercises(id, name), session_sets(*))'
+            '*, routines(name), routine_days(day_number, name), session_exercises(*, exercises(id, name), session_sets(*))'
           )
           .eq('user_id', userId)
           .eq('routine_id', activeRId)
@@ -69,14 +82,25 @@ export default function CycleCompareScreen() {
           const compResult = analyzeCycleProgression(
             sessionData,
             activeRId,
-            selectedDayNumber
+            selectedDayNumber,
+            {
+              routineDayId: resolvedDayId,
+              dayName: matchedDay?.name || undefined,
+            }
           );
           setComparison(compResult);
+        } else {
+          setComparison(null);
         }
+      } else {
+        setRoutines([]);
+        setComparison(null);
       }
+    } else {
+      setComparison(null);
     }
     setLoading(false);
-  }, [selectedRoutineId, selectedDayNumber]);
+  }, [selectedRoutineId, selectedDayNumber, routineIdParam, routineDayIdParam]);
 
   useEffect(() => {
     loadRoutinesAndComparison();
@@ -84,6 +108,10 @@ export default function CycleCompareScreen() {
 
   const activeRoutine = routines.find((r) => r.id === selectedRoutineId);
   const splitDaysCount = activeRoutine?.days_in_split || 4;
+  const activeDayObj = activeRoutine?.routine_days?.find(
+    (d: any) => Number(d.day_number) === selectedDayNumber
+  );
+  const activeDayLabel = activeDayObj?.name || `Day ${selectedDayNumber}`;
 
   return (
     <View className="flex-1 bg-slate-950 px-4 pb-4" style={{ paddingTop: Math.max(insets.top, 16) }}>
@@ -107,6 +135,53 @@ export default function CycleCompareScreen() {
 
       {/* Routine & Split Day Selectors */}
       <View className="mb-5 space-y-3">
+        {routines.length > 1 && (
+          <View className="mb-2">
+            <Text className="text-slate-400 text-[10px] font-bold uppercase tracking-wider mb-1.5">
+              Select Routine:
+            </Text>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} className="flex-row">
+              <View className="flex-row gap-2 py-1">
+                {routines.map((r) => {
+                  const isSelected = r.id === selectedRoutineId;
+                  return (
+                    <TouchableOpacity
+                      key={r.id}
+                      onPress={() => {
+                        setSelectedRoutineId(r.id);
+                        const nextSplitCount = r.days_in_split || 4;
+                        if (selectedDayNumber > nextSplitCount) {
+                          setSelectedDayNumber(1);
+                        }
+                      }}
+                      className={`px-3.5 py-2 rounded-xl border flex-row items-center ${
+                        isSelected
+                          ? 'bg-blue-600 border-blue-500 shadow-md shadow-blue-950/40'
+                          : 'bg-slate-900 border-slate-800'
+                      }`}
+                    >
+                      <Text
+                        className={`font-bold text-xs ${
+                          isSelected ? 'text-white' : 'text-slate-300'
+                        }`}
+                      >
+                        {r.name}
+                      </Text>
+                      {r.status === 'active' && (
+                        <View className="ml-1.5 px-1.5 py-0.5 rounded bg-emerald-500/20 border border-emerald-500/30">
+                          <Text className="text-emerald-300 text-[9px] font-extrabold uppercase">
+                            Active
+                          </Text>
+                        </View>
+                      )}
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            </ScrollView>
+          </View>
+        )}
+
         {/* Split Day Picker */}
         <View>
           <Text className="text-slate-400 text-[10px] font-bold uppercase tracking-wider mb-1.5">
@@ -117,6 +192,13 @@ export default function CycleCompareScreen() {
               {Array.from({ length: splitDaysCount }).map((_, idx) => {
                 const dayNum = idx + 1;
                 const isSelected = selectedDayNumber === dayNum;
+                const matchedDay = activeRoutine?.routine_days?.find(
+                  (d: any) => Number(d.day_number) === dayNum
+                );
+                const chipLabel =
+                  matchedDay?.name && matchedDay.name !== `Day ${dayNum}`
+                    ? `Day ${dayNum} · ${matchedDay.name}`
+                    : `Day ${dayNum}`;
                 return (
                   <TouchableOpacity
                     key={dayNum}
@@ -132,7 +214,7 @@ export default function CycleCompareScreen() {
                         isSelected ? 'text-white' : 'text-slate-300'
                       }`}
                     >
-                      Day {dayNum}
+                      {chipLabel}
                     </Text>
                   </TouchableOpacity>
                 );
@@ -153,7 +235,7 @@ export default function CycleCompareScreen() {
             Insufficient Cycle History
           </Text>
           <Text className="text-slate-400 text-xs text-center leading-5 max-w-[280px]">
-            Complete Day {selectedDayNumber} across at least 2 cycles to generate automated progressive overload comparison reports.
+            Complete {activeDayLabel} across at least 2 cycles to generate automated progressive overload comparison reports.
           </Text>
         </View>
       ) : (

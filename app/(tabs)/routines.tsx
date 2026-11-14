@@ -41,8 +41,12 @@ export default function RoutinesScreen() {
     const userId = session?.user?.id;
     if (!userId) return;
 
-    // Deactivate all
-    await supabase.from('routines').update({ status: 'draft' }).eq('user_id', userId);
+    // Deactivate currently active routine only (preserve completed routines)
+    await supabase
+      .from('routines')
+      .update({ status: 'draft' })
+      .eq('user_id', userId)
+      .eq('status', 'active');
     // Activate target
     await supabase.from('routines').update({ status: 'active' }).eq('id', routineId);
 
@@ -199,7 +203,7 @@ export default function RoutinesScreen() {
             </View>
             <Text className="text-white text-xl font-bold mb-2">Delete Routine?</Text>
             <Text className="text-slate-400 text-sm leading-5 mb-6">
-              Are you sure you want to delete <Text className="text-white font-semibold">"{routineToDelete?.name}"</Text>? All split days and assigned exercises within this routine will also be removed.
+              Are you sure you want to delete <Text className="text-white font-semibold">"{routineToDelete?.name}"</Text>? Split days and assigned exercises in this routine will be removed, while all historical workout logs, completed sets, and personal records will be preserved.
             </Text>
 
             <View className="flex-row gap-3">

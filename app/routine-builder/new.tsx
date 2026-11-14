@@ -3,6 +3,7 @@ import { View, Text, TextInput, TouchableOpacity, ScrollView, Alert, ActivityInd
 import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { supabase } from '../../src/lib/supabase';
+import { usePreferencesStore } from '../../src/store/usePreferencesStore';
 import { X, Plus, Trash2, ChevronRight, Check, Sparkles, AlertCircle, Dumbbell, Search, Layers, Link2, Unlink } from 'lucide-react-native';
 
 const MUSCLE_GROUPS = ['Chest', 'Back', 'Shoulders', 'Legs', 'Biceps', 'Triceps', 'Core'] as const;
@@ -79,6 +80,7 @@ type DaySplit = {
 export default function RoutineBuilderScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  const defaultRestSeconds = usePreferencesStore((s) => s.defaultRestSeconds);
   const [step, setStep] = useState<1 | 2 | 3>(1); // 1: Setup, 2: Assign, 3: Volumetric Sandbox Review
   const [loading, setLoading] = useState(false);
   
@@ -207,7 +209,7 @@ export default function RoutineBuilderScreen() {
           user_id: userId,
           name: newExName.trim(),
           is_bodyweight_only: newExIsBodyweight,
-          default_rest_timer_seconds: 90,
+          default_rest_timer_seconds: defaultRestSeconds || 90,
           updated_at: new Date().toISOString()
         }])
         .select()
@@ -225,7 +227,8 @@ export default function RoutineBuilderScreen() {
         }))
       ];
 
-      await supabase.from('exercise_muscle_groups').insert(muscleRows);
+      const { error: muscleErr } = await supabase.from('exercise_muscle_groups').insert(muscleRows);
+      if (muscleErr) throw muscleErr;
 
       const createdOption: ExerciseOption = {
         id: exData.id,
@@ -505,14 +508,15 @@ export default function RoutineBuilderScreen() {
 
       const routineId = routineData.id;
 
-      // If set to active, deactivate other routines for this user
+      // If set to active, deactivate currently active routines for this user (preserve completed routines)
       if (shouldActivate) {
         const { error: deactErr } = await supabase
           .from('routines')
           .update({ status: 'draft' })
           .eq('user_id', userId)
+          .eq('status', 'active')
           .neq('id', routineId);
-        if (deactErr) console.warn('Could not deactivate other routines:', deactErr);
+        if (deactErr) console.warn('Could not deactivate other active routines:', deactErr);
       }
 
       // Ensure days array has exactly cleanDaysInSplit elements
@@ -529,15 +533,35 @@ export default function RoutineBuilderScreen() {
       for (let i = 0; i < finalDays.length; i++) {
         const d = finalDays[i];
         const dayNumber = i + 1;
+        const cleanDayName = d.name?.trim() || `Day ${dayNumber}`;
 
-        const { data: dayData, error: dayErr } = await supabase
+        let { data: dayData, error: dayErr } = await supabase
           .from('routine_days')
           .insert([{
             routine_id: routineId,
             day_number: dayNumber,
+            name: cleanDayName,
           }])
           .select()
           .single();
+
+        if (
+          dayErr &&
+          (dayErr.message?.includes('name') ||
+            dayErr.details?.includes('name') ||
+            dayErr.message?.includes('schema cache'))
+        ) {
+          const fallbackDay = await supabase
+            .from('routine_days')
+            .insert([{
+              routine_id: routineId,
+              day_number: dayNumber,
+            }])
+            .select()
+            .single();
+          dayData = fallbackDay.data;
+          dayErr = fallbackDay.error;
+        }
 
         if (dayErr || !dayData) {
           throw dayErr || new Error(`Failed to create routine day ${dayNumber}`);

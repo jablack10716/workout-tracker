@@ -36,7 +36,7 @@ export default function SessionDetailScreen() {
     const { data: currentSession, error } = await supabase
       .from('sessions')
       .select(
-        '*, routines(name), session_exercises(*, exercises(id, name, is_bodyweight_only, exercise_muscle_groups(*)), session_sets(*))'
+        '*, routines(name), routine_days(day_number, name), session_exercises(*, exercises(id, name, is_bodyweight_only, exercise_muscle_groups(*)), session_sets(*))'
       )
       .eq('id', id)
       .single();
@@ -187,7 +187,7 @@ export default function SessionDetailScreen() {
                 pathname: '/history/compare',
                 params: {
                   routine_id: session.routine_id,
-                  day_number: session.day_order || 1,
+                  day_number: session.routine_days?.day_number || session.day_order || 1,
                   routine_day_id: session.routine_day_id || '',
                 },
               })

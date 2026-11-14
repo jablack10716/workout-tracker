@@ -2,6 +2,7 @@ import React from 'react';
 import { View, Text, TextInput, TouchableOpacity } from 'react-native';
 import * as Haptics from 'expo-haptics';
 import { Check } from 'lucide-react-native';
+import { usePreferencesStore } from '../store/usePreferencesStore';
 
 export interface SetRowProps {
   setIndex: number;
@@ -26,9 +27,11 @@ export const SetRow: React.FC<SetRowProps> = ({
   onChangeWeight,
   onChangeReps,
 }) => {
+  const hapticsEnabled = usePreferencesStore((s) => s.hapticsEnabled);
+
   const handleToggle = () => {
     try {
-      if (!isCompleted) {
+      if (!isCompleted && hapticsEnabled) {
         Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
       }
     } catch (e) {

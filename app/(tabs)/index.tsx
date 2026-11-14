@@ -23,8 +23,11 @@ import {
   Sparkles,
   Zap,
   Award,
+  AlertTriangle,
+  RefreshCw,
 } from 'lucide-react-native';
 import { supabase } from '../../src/lib/supabase';
+import { useActiveWorkoutStore } from '../../src/store/useActiveWorkoutStore';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Circle } from 'react-native-svg';
@@ -43,6 +46,7 @@ import { Sparkline } from '../../src/components/charts/Sparkline';
 export default function DashboardScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const [displayName, setDisplayName] = useState('');
   const [activeRoutine, setActiveRoutine] = useState<any>(null);
   const [allSessions, setAllSessions] = useState<any[]>([]);
@@ -51,12 +55,33 @@ export default function DashboardScreen() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
+  const activeWorkoutDraft = useActiveWorkoutStore((s) => s.draft);
+  const workoutStoreHydrated = useActiveWorkoutStore((s) => s._hasHydrated);
+
+  const matchingDraft =
+    workoutStoreHydrated &&
+    activeWorkoutDraft &&
+    (!currentUserId || activeWorkoutDraft.userId === currentUserId)
+      ? activeWorkoutDraft
+      : null;
+
+  const draftCompletedSets = matchingDraft
+    ? matchingDraft.workoutExercises.reduce(
+        (acc, ex) => acc + ex.sets.filter((s) => s.is_completed).length,
+        0
+      )
+    : 0;
+  const draftTotalSets = matchingDraft
+    ? matchingDraft.workoutExercises.reduce((acc, ex) => acc + ex.sets.length, 0)
+    : 0;
+
   const loadDashboardData = useCallback(async () => {
     try {
       const {
         data: { session },
       } = await supabase.auth.getSession();
       const user = session?.user;
+      setCurrentUserId(user?.id ?? null);
 
       if (user?.user_metadata?.display_name) {
         setDisplayName(user.user_metadata.display_name);
@@ -249,6 +274,75 @@ export default function DashboardScreen() {
             </Text>
           </View>
         </View>
+
+        {/* OFFLINE / IN-PROGRESS WORKOUT RECOVERY BANNER */}
+        {matchingDraft?.syncStatus === 'pending_sync' && (
+          <TouchableOpacity
+            onPress={() => router.push('/workout/complete' as any)}
+            activeOpacity={0.85}
+            className="mb-4 rounded-2xl border border-amber-500/40 bg-amber-950/40 p-4 flex-row items-center justify-between"
+          >
+            <View className="flex-row items-center flex-1 mr-3">
+              <View className="h-10 w-10 rounded-xl bg-amber-500/20 border border-amber-500/30 items-center justify-center mr-3">
+                <AlertTriangle size={20} color="#f59e0b" />
+              </View>
+              <View className="flex-1">
+                <Text className="text-amber-300 text-xs font-extrabold uppercase tracking-wider">
+                  Unsaved Workout Ready to Sync
+                </Text>
+                <Text className="text-white font-bold text-sm mt-0.5" numberOfLines={1}>
+                  {matchingDraft.routineName} · Day {matchingDraft.dayNumber}
+                  {matchingDraft.dayName ? ` (${matchingDraft.dayName})` : ''}
+                </Text>
+                <Text className="text-amber-200/80 text-xs mt-0.5">
+                  {draftCompletedSets}/{draftTotalSets} sets stored locally · Tap to retry save
+                </Text>
+              </View>
+            </View>
+            <View className="bg-amber-500 rounded-xl px-3 py-2 flex-row items-center">
+              <RefreshCw size={14} color="#090d16" />
+              <Text className="text-slate-950 font-extrabold text-xs ml-1.5">Sync</Text>
+            </View>
+          </TouchableOpacity>
+        )}
+
+        {matchingDraft?.syncStatus === 'in_progress' && (
+          <TouchableOpacity
+            onPress={() =>
+              router.push({
+                pathname: '/workout/active',
+                params: {
+                  routineId: matchingDraft.routineId,
+                  routineDayId: matchingDraft.routineDayId,
+                  dayNumber: String(matchingDraft.dayNumber),
+                },
+              } as any)
+            }
+            activeOpacity={0.85}
+            className="mb-4 rounded-2xl border border-emerald-500/40 bg-emerald-950/40 p-4 flex-row items-center justify-between"
+          >
+            <View className="flex-row items-center flex-1 mr-3">
+              <View className="h-10 w-10 rounded-xl bg-emerald-500/20 border border-emerald-500/30 items-center justify-center mr-3">
+                <RefreshCw size={18} color="#34d399" />
+              </View>
+              <View className="flex-1">
+                <Text className="text-emerald-300 text-xs font-extrabold uppercase tracking-wider">
+                  Resume In-Progress Workout
+                </Text>
+                <Text className="text-white font-bold text-sm mt-0.5" numberOfLines={1}>
+                  {matchingDraft.routineName} · Day {matchingDraft.dayNumber}
+                  {matchingDraft.dayName ? ` (${matchingDraft.dayName})` : ''}
+                </Text>
+                <Text className="text-emerald-200/80 text-xs mt-0.5">
+                  {draftCompletedSets}/{draftTotalSets} sets completed · Cycle {matchingDraft.cycleNumber}
+                </Text>
+              </View>
+            </View>
+            <View className="bg-emerald-500 rounded-xl px-3 py-2">
+              <Text className="text-slate-950 font-extrabold text-xs">Resume</Text>
+            </View>
+          </TouchableOpacity>
+        )}
 
         {/* HERO WORKOUT CARD */}
         {activeRoutine ? (
