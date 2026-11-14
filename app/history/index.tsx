@@ -15,7 +15,7 @@ import {
   ArrowRightLeft,
   Trophy,
 } from 'lucide-react-native';
-import { calculateEstimated1RM } from '../../src/utils/analyticsEngine';
+import { calculateEstimated1RM, isWorkingCompletedSet } from '../../src/utils/analyticsEngine';
 
 export default function HistoryScreen() {
   const router = useRouter();
@@ -61,7 +61,7 @@ export default function HistoryScreen() {
     let vol = 0;
     (s.session_exercises || []).forEach((se: any) => {
       (se.session_sets || []).forEach((st: any) => {
-        if (st.is_completed) {
+        if (isWorkingCompletedSet(st)) {
           vol += (Number(st.weight) || 0) * (Number(st.reps) || 0);
         }
       });
@@ -95,7 +95,7 @@ export default function HistoryScreen() {
   currentMonthSessions.forEach((s) => {
     (s.session_exercises || []).forEach((se: any) => {
       (se.session_sets || []).forEach((st: any) => {
-        if (st.is_completed) {
+        if (isWorkingCompletedSet(st)) {
           monthlySets++;
           monthlyTonnage += (Number(st.weight) || 0) * (Number(st.reps) || 0);
         }
@@ -118,7 +118,7 @@ export default function HistoryScreen() {
     (item.session_exercises || []).forEach((se: any) => {
       if (se.exercises?.name) exerciseNames.push(se.exercises.name);
       (se.session_sets || []).forEach((st: any) => {
-        if (st.is_completed) {
+        if (isWorkingCompletedSet(st)) {
           completedSetsCount++;
           const w = Number(st.weight) || 0;
           const r = Number(st.reps) || 0;

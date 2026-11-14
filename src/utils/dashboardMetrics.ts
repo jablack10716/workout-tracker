@@ -2,6 +2,8 @@
  * Dashboard Metrics & Analytics Calculation Engine
  */
 
+import { isWorkingCompletedSet } from './analyticsEngine';
+
 export interface MuscleGroupVolume {
   name: string;
   targetSets: number;
@@ -77,7 +79,7 @@ export function computeDashboardStats(
       let sessionMax = 0;
 
       (se.session_sets || []).forEach((st: any) => {
-        if (st.is_completed && st.weight && st.weight > 0) {
+        if (isWorkingCompletedSet(st) && st.weight && st.weight > 0) {
           if (st.weight > sessionMax) {
             sessionMax = st.weight;
           }
@@ -117,7 +119,7 @@ export function computeDashboardStats(
         se.exercises?.exercise_muscle_groups || [];
 
       (se.session_sets || []).forEach((st: any) => {
-        if (st.is_completed) {
+        if (isWorkingCompletedSet(st)) {
           weeklyCompletedSets += 1;
           const w = Number(st.weight) || 0;
           const r = Number(st.reps) || 0;
@@ -185,7 +187,14 @@ export function computeDashboardStats(
             name: re.exercises?.name || 'Exercise',
             plannedSets: planned,
             targetWeight: re.target_weight !== null && re.target_weight !== undefined ? Number(re.target_weight) : null,
-            targetReps: re.target_reps !== null && re.target_reps !== undefined ? Number(re.target_reps) : null,
+            targetReps:
+              re.target_rep_max !== null && re.target_rep_max !== undefined
+                ? Number(re.target_rep_max)
+                : re.target_reps !== null && re.target_reps !== undefined
+                ? Number(re.target_reps)
+                : re.target_rep_min !== null && re.target_rep_min !== undefined
+                ? Number(re.target_rep_min)
+                : null,
             isBodyweight: Boolean(re.exercises?.is_bodyweight_only),
           });
         }
@@ -225,7 +234,7 @@ export function computeDashboardStats(
     let todaySets = 0;
     (todaySession.session_exercises || []).forEach((se: any) => {
       (se.session_sets || []).forEach((st: any) => {
-        if (st.is_completed) {
+        if (isWorkingCompletedSet(st)) {
           todaySets += 1;
           todayTonnage += (Number(st.weight) || 0) * (Number(st.reps) || 0);
         }

@@ -1,6 +1,9 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { create } from 'zustand';
 import { createJSONStorage, persist } from 'zustand/middleware';
+import type { SetType } from '../utils/analyticsEngine';
+
+export type { SetType };
 
 export interface ActiveWorkoutSet {
   set_number: number;
@@ -8,6 +11,8 @@ export interface ActiveWorkoutSet {
   reps: string;
   prev_performance?: string;
   is_completed: boolean;
+  set_type?: SetType;
+  rir?: number | null;
 }
 
 export interface ActiveWorkoutExercise {
@@ -19,6 +24,11 @@ export interface ActiveWorkoutExercise {
   prev_performance?: string;
   next_target_weight: string;
   is_target_weight_manually_edited?: boolean;
+  next_target_reps?: string;
+  is_target_reps_manually_edited?: boolean;
+  target_rep_min?: number | null;
+  target_rep_max?: number | null;
+  is_swapped?: boolean;
   superset_id?: string | null;
   superset_order?: number;
   sets: ActiveWorkoutSet[];
@@ -41,6 +51,7 @@ export interface ActiveWorkoutDraft {
   workoutExercises: ActiveWorkoutExercise[];
   restTimerEndTimestamp: number | null;
   restTimerTotalSeconds: number | null;
+  restTimerLabel?: string | null;
   syncStatus: ActiveWorkoutSyncStatus;
   savedSessionId?: string | null;
 }
@@ -53,7 +64,11 @@ interface ActiveWorkoutStoreState {
   updateWorkoutExercises: (
     updater: (prev: ActiveWorkoutExercise[]) => ActiveWorkoutExercise[]
   ) => void;
-  setRestTimer: (endTimestamp: number | null, totalSeconds: number | null) => void;
+  setRestTimer: (
+    endTimestamp: number | null,
+    totalSeconds: number | null,
+    label?: string | null
+  ) => void;
   markPendingSync: (durationSeconds: number) => void;
   setSavedSessionId: (sessionId: string | null) => void;
   clearActiveWorkout: () => void;
@@ -85,7 +100,7 @@ export const useActiveWorkoutStore = create<ActiveWorkoutStoreState>()(
             },
           };
         }),
-      setRestTimer: (restTimerEndTimestamp, restTimerTotalSeconds) =>
+      setRestTimer: (restTimerEndTimestamp, restTimerTotalSeconds, restTimerLabel) =>
         set((state) => {
           if (!state.draft) return state;
           return {
@@ -93,6 +108,7 @@ export const useActiveWorkoutStore = create<ActiveWorkoutStoreState>()(
               ...state.draft,
               restTimerEndTimestamp,
               restTimerTotalSeconds,
+              restTimerLabel: restTimerEndTimestamp ? restTimerLabel ?? 'Rest Timer' : null,
             },
           };
         }),
@@ -105,6 +121,7 @@ export const useActiveWorkoutStore = create<ActiveWorkoutStoreState>()(
               durationSeconds,
               restTimerEndTimestamp: null,
               restTimerTotalSeconds: null,
+              restTimerLabel: null,
               syncStatus: 'pending_sync',
             },
           };

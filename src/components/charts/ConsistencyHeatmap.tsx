@@ -1,5 +1,6 @@
 import React from 'react';
 import { View, Text, ScrollView } from 'react-native';
+import { isWorkingCompletedSet } from '../../utils/analyticsEngine';
 
 interface HeatmapDay {
   dateStr: string; // YYYY-MM-DD
@@ -38,7 +39,7 @@ export const ConsistencyHeatmap: React.FC<ConsistencyHeatmapProps> = ({
     let sessionVol = 0;
     (s.session_exercises || []).forEach((se: any) => {
       (se.session_sets || []).forEach((st: any) => {
-        if (st.is_completed) {
+        if (isWorkingCompletedSet(st)) {
           sessionVol += (Number(st.weight) || 0) * (Number(st.reps) || 0);
         }
       });

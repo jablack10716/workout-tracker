@@ -1,7 +1,7 @@
 > **Reference Pack Metadata**
 > - **App Name:** Best Damn Weight Lifting Tracker Ever (`weightliftinglog` / UI Banner: *Best Damn Workout Tracker Ever*)
-> - **Git Commit SHA & Branch:** `9a6f80e` (`main`) + Phase 1 Working Tree Updates — Base Commit `2026-09-30 18:54:32 -0500`
-> - **Snapshot Date:** `2026-11-13`
+> - **Git Commit SHA & Branch:** `9a6f80e` (`main`) + Phase 1 & Phase 2 Working Tree Updates — Base Commit `2026-09-30 18:54:32 -0500`
+> - **Snapshot Date:** `2026-11-14`
 > - **File Scope:** High-level product summary, target platforms, exact framework/library versions, runtime & offline/in-gym persistence behavior, source directory map, and system data-flow architecture.
 
 # 01 — Architecture & Tech Stack
@@ -9,10 +9,10 @@
 ## 1. Product Summary & Target Platforms
 
 **Best Damn Weight Lifting Tracker Ever** (`WeightLiftingLog`) is a cross-platform hypertrophy and strength training planner, gym-floor set logger, and exercise-science analytics application. Its core domain model centers on:
-- **Fractional Volumetric Split Planning ("Sandbox Mode"):** Users build 3-to-7-day training splits across multi-cycle blocks while previewing weekly muscle-group set volume weighted at `1.0` (primary) and `0.5` (secondary).
+- **Fractional Volumetric Split Planning ("Sandbox Mode"):** Users create or edit 2-to-7-day training splits (`Edit Split` hydration preserves historical `routine_days.id` links), reorder blocks or superset slots, configure min–max rep ranges, inspect non-blocking heavy-lift / daily fatigue guardrails, and preview weekly muscle-group volume weighted at `1.0` (primary) and `0.5` (secondary) against ACSM hypertrophy landmarks (`10–22` sets/week).
 - **Sequential Cycle Rotation:** Rather than locking workouts to calendar weekdays, an active routine advances sequentially through `Day 1 .. N` of `Cycle 1`, then wraps to `Day 1` of `Cycle 2`.
-- **Low-Friction Gym Floor Execution:** Supports standalone lifts and multi-exercise supersets/giant sets, Set-1-to-Set-N value cloning, previous-session ghost text, smart rest countdown timers, and "Fresh Memory" `Next Target Weight` capture.
-- **Exercise Science Analytics:** Tracks Epley estimated 1RM curves, session tonnage and density (`lbs/min`), 7-muscle-group MAV (`12–20` sets/week) radar comparisons, 12-week consistency heatmaps, and cycle-over-cycle progression diffs.
+- **Low-Friction Gym Floor Execution:** Supports standalone lifts and multi-exercise supersets/giant sets, tap-to-cycle set types (`normal`, `warmup`, `drop`, `failure`), per-set RIR (`0–4+`), working-set auto-cloning, warmup-excluded previous-session ghost text, optional mid-round superset transition breathers, session-only crowded-gym **Swap Exercise**, trailing uncompleted Set/Round removal, and "Fresh Memory" `Next Target Weight` / `Next Target Reps` (for bodyweight movements) capture.
+- **Exercise Science Analytics:** Tracks warmup-excluded Epley estimated 1RM curves, session tonnage and density (`lbs/min`), 7-muscle-group ACSM optimal volume (`10–22` sets/week) status & active-split radar target polygons, 12-week consistency heatmaps, cycle-over-cycle progression diffs, and CSV export including `SetType` and `RIR`.
 
 ### Target Platforms
 Built as a **universal Expo / React Native single codebase** targeting:
@@ -24,7 +24,7 @@ Built as a **universal Expo / React Native single codebase** targeting:
 
 ## 2. Exact Tech Stack & Version Inventory
 
-All versions below reflect the exact declarations in `package.json`, `app.json`, and `supabase/config.toml` as of the `2026-11-13` Phase 1 working tree on `9a6f80e`.
+All versions below reflect the exact declarations in `package.json`, `app.json`, and `supabase/config.toml` as of the `2026-11-14` Phase 1 & Phase 2 working tree on `9a6f80e`.
 
 | Layer | Technology / Package | Version | Role & Implementation Notes |
 | :--- | :--- | :--- | :--- |
@@ -41,10 +41,10 @@ All versions below reflect the exact declarations in `package.json`, `app.json`,
 | **Device APIs** | `expo-keep-awake`, `expo-haptics`, `expo-linking`, `expo-constants`, `expo-status-bar` | `~57.0.2` / `~57.0.x` | Screen wake-lock during active sessions (`expo-keep-awake`), preference-gated tactile feedback (`expo-haptics`), and deep-linking |
 | **State Management** | `zustand` (`persist` middleware) + React Hooks | `^5.0.14` | **2 persisted Zustand stores** in `src/store/` (`useActiveWorkoutStore`, `usePreferencesStore`), plus screen-local React hooks for PostgREST fetches. |
 | **Backend / BaaS** | `@supabase/supabase-js` + `react-native-url-polyfill` | `^2.110.3` / `^3.0.0` | Direct client-to-Supabase Auth (`auth/v1`) & PostgREST (`rest/v1`) queries. **0** custom API routes, Server Actions, or Edge Functions. |
-| **Database** | PostgreSQL (via Supabase) | `17` | `8` public tables, `3` custom enums, `7` SQL migrations, Row-Level Security (RLS) enforced on all tables, PostgREST `max_rows = 1000`. |
+| **Database** | PostgreSQL (via Supabase) | `17` | `8` public tables, `3` custom enums, `8` SQL migrations, Row-Level Security (RLS) enforced on all tables, PostgREST `max_rows = 1000`. |
 | **Local Storage** | `@react-native-async-storage/async-storage` | `^3.1.1` | Persists **3 namespaces**: `supabase.auth` JWT session tokens, active/pending workout drafts (`weightlifting-active-workout-v1`), and user preferences (`weightlifting-preferences-v1`). |
 | **Auth** | Supabase Auth (GoTrue) | Built-in | Email + password sign-up/sign-in (`jwt_expiry = 3600`, refresh token rotation enabled). OAuth/MFA/SMS disabled. |
-| **Hosting / CI** | Static Web Export (`npx expo export -p web`) | Verified (`dist/`) | Web bundle exports cleanly (`2,672` modules); no `eas.json`, `vercel.json`, `netlify.toml`, or `.github/workflows` exist in repo. |
+| **Hosting / CI** | Static Web Export (`npx expo export -p web`) | Verified (`dist/`) | Web bundle exports cleanly (`2,673` modules); no `eas.json`, `vercel.json`, `netlify.toml`, or `.github/workflows` exist in repo. |
 | **Automated Tests** | None | `0` tests | No test runner (Jest/Vitest/Playwright) installed; `0` automated unit/integration/E2E tests (`1` manual SQL RLS snippet). |
 
 ---
@@ -81,7 +81,7 @@ Historical queries, routine management, and analytics fetch directly from Supaba
 WeightLiftingLog/
 ├── app/                              # Expo Router file-based navigation (3 layouts + 13 screens)
 │   ├── _layout.tsx                   # Root Stack navigator + Supabase Auth session gate
-│   ├── settings.tsx                  # Modal screen: display name update, persisted timer/haptics prefs, sign-out
+│   ├── settings.tsx                  # Modal screen: display name, rest defaults, superset breather, haptics, sign-out
 │   ├── (auth)/
 │   │   ├── _layout.tsx               # Unauthenticated Stack wrapper
 │   │   └── login.tsx                 # Email/password sign-in & sign-up form
@@ -89,30 +89,30 @@ WeightLiftingLog/
 │   │   ├── _layout.tsx               # Bottom Tab bar (Dashboard, Exercises, Routines)
 │   │   ├── index.tsx                 # Dashboard: KPIs, Resume/Sync banners, Hero Workout card, 1RM sparklines, volume ring
 │   │   ├── exercises.tsx             # Exercise Library: search by name/muscle, muscle badges
-│   │   └── routines.tsx              # Routines manager: list, activate, delete confirmation modal (preserves logs)
+│   │   └── routines.tsx              # Routines manager: list, activate, Edit Split (passes routineId), safe delete modal
 │   ├── exercises/
 │   │   └── [id].tsx                  # Modal screen: create, edit/delete custom exercises, read-only system view + duplicate
 │   ├── routine-builder/
-│   │   └── new.tsx                   # 3-step Sandbox wizard: split setup, named days/supersets, volume review
+│   │   └── new.tsx                   # 3-step Sandbox wizard + Edit Split mode: 2–7d splits, reordering, rep ranges, ACSM review
 │   ├── workout/
-│   │   ├── active.tsx                # Live Gym Floor Logger: crash-safe draft, wake-lock, wall-clock timer, supersets
-│   │   └── complete.tsx              # Idempotent PostgREST completion engine, target sync, cycle rotation, retry recovery
+│   │   ├── active.tsx                # Live Gym Logger: wake-lock, wall-clock/transition timer, SetType/RIR, Swap, Remove Set/Round
+│   │   └── complete.tsx              # Idempotent PostgREST completion engine, bodyweight + weight target sync, cycle rotation
 │   ├── history/
 │   │   ├── index.tsx                 # Monthly calendar strip + chronological session history list
-│   │   ├── [id].tsx                  # Single session breakdown, muscle attribution, cycle delta banner
+│   │   ├── [id].tsx                  # Single session breakdown, SetType/RIR/BW badges, muscle attribution, cycle delta banner
 │   │   └── compare.tsx               # Split-day Cycle-over-Cycle comparison screen with routine selector
 │   └── analytics/
-│       └── index.tsx                 # Performance Hub: KPIs, Epley 1RM curve, Radar MAV, Heatmap, PR wall, Web CSV export
+│       └── index.tsx                 # Performance Hub: KPIs, Epley 1RM, active-split Radar, ACSM bars, Heatmap, PRs, CSV (+SetType/RIR)
 ├── src/
 │   ├── components/
-│   │   ├── SetRow.tsx                # Reusable standalone set input row with pref-gated haptics & ghost previous text
+│   │   ├── SetRow.tsx                # Reusable standalone set row with tap-to-cycle SetType, RIR pill, BW badge & haptics
 │   │   ├── MuscleFeedbackModal.tsx   # Post-workout pump/soreness/workload modal (ORPHANED / unmounted)
 │   │   └── charts/                   # Custom react-native-svg & View data visualizations
 │   │       ├── BarChart.tsx          # Interactive weekly tonnage SVG bar chart
 │   │       ├── ConsistencyHeatmap.tsx# 12-week Monday–Sunday local-calendar intensity grid
 │   │       ├── CycleComparisonView.tsx # Side-by-side cycle set & tonnage comparison cards
 │   │       ├── LineChart.tsx         # Interactive SVG area/line chart with PR dot highlights
-│   │       ├── RadarChart.tsx        # 7-axis polygonal SVG muscle balance vs target overlay
+│   │       ├── RadarChart.tsx        # 7-axis polygonal SVG muscle balance vs active split target / ACSM baseline
 │   │       └── Sparkline.tsx         # Compact inline SVG trend line for Dashboard cards
 │   ├── hooks/
 │   │   └── useExercises.ts           # Fetches exercises joined with exercise_muscle_groups
@@ -121,15 +121,16 @@ WeightLiftingLog/
 │   │   └── auth.ts                   # Dev auto-login helper (ORPHANED / unused)
 │   ├── store/
 │   │   ├── useActiveWorkoutStore.ts  # Crash-safe AsyncStorage-backed active workout & pending-sync store
-│   │   └── usePreferencesStore.ts    # Persisted defaultRestSeconds & hapticsEnabled preferences store
+│   │   └── usePreferencesStore.ts    # Persisted defaultRestSeconds, supersetTransitionSeconds & hapticsEnabled
 │   └── utils/
-│       ├── analyticsEngine.ts        # Pure functions: Epley/Brzycki 1RM, PRs, weekly volume, MAV status, streaks, cycle diff
-│       ├── autoRegEngine.ts          # RIR schedule (active on Dashboard) + load/volume autoreg formulas (unused)
-│       └── dashboardMetrics.ts       # Computes Dashboard KPIs, weekly target vs completed sets, today's workout preview
+│       ├── analyticsEngine.ts        # Warmup-filtered Epley/Brzycki 1RM, PRs, weekly volume, ACSM landmarks, streaks, diff
+│       ├── autoRegEngine.ts          # RIR schedule (`getTargetRIR`) + load/volume autoreg formulas (unused)
+│       ├── dashboardMetrics.ts       # Computes warmup-excluded Dashboard KPIs, weekly targets, today's workout preview
+│       └── supersetSynergy.ts        # Evaluates fractional (1.0/0.5) superset synergy & split-day neural/volume guardrails
 ├── supabase/
 │   ├── config.toml                   # Local Supabase CLI config (Postgres 17, ports 54321–54327, max_rows=1000)
 │   ├── seed.sql                      # Seeds system user (0000...0000) + 12 exercises + 20 muscle mappings
-│   ├── migrations/                   # 7 sequential SQL schema, RLS, persistence, superset, enum & data-safety migrations
+│   ├── migrations/                   # 8 sequential SQL schema, RLS, persistence, superset, enum, data-safety & Phase 2 migrations
 │   └── snippets/
 │       └── phase1_rls_validation.sql # Manual SQL queries for inspecting RLS policies & role grants
 └── docs/reference/                   # Ground-truth architectural & domain reference pack (this directory)
@@ -147,7 +148,7 @@ flowchart TD
         
         subgraph Screens["UI Screens & Flows"]
             Tabs["Tabs: Dashboard, Exercises, Routines"]
-            Builder["Routine Builder Wizard (/routine-builder/new)"]
+            Builder["Routine Builder / Edit Split (/routine-builder/new)"]
             Logger["Live Gym Logger (/workout/active)"]
             Complete["Completion & Retry Engine (/workout/complete)"]
             Insights["History & Analytics (/history/*, /analytics)"]
@@ -156,6 +157,7 @@ flowchart TD
         subgraph Domain["Pure Engines & Persisted Stores (src/)"]
             DashCalc["dashboardMetrics.ts"]
             SciCalc["analyticsEngine.ts + SVG Charts"]
+            SynergyCalc["supersetSynergy.ts"]
             AutoReg["autoRegEngine.ts (getTargetRIR)"]
             Stores["Zustand Stores (useActiveWorkoutStore, usePreferencesStore)"]
         end
@@ -168,7 +170,7 @@ flowchart TD
         GoTrue["Supabase Auth (GoTrue / auth.users)"]
         PostgREST["PostgREST Data API (rest/v1, max_rows=1000)"]
         RLS["PostgreSQL 17 Row-Level Security Policies"]
-        PG[("8 Public Tables + 3 Enums")]
+        PG[("8 Public Tables + 3 Enums (8 Migrations)")]
     end
 
     Router --> AuthGate
@@ -176,6 +178,7 @@ flowchart TD
     Tabs --> Builder
     Tabs --> Logger
     Tabs --> Insights
+    Builder --> SynergyCalc
     Logger <-- "in_progress Draft" --> Stores
     Stores -- "pending_sync Draft" --> Complete
     Stores -- "Resume / Retry Banners" --> Tabs

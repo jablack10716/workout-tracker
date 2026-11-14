@@ -38,6 +38,7 @@ import {
   getExerciseE1RMHistory,
   getMuscleGroupVolumeStatusList,
   calculateWorkoutStreak,
+  isWorkingCompletedSet,
   PREntry,
 } from '../../src/utils/analyticsEngine';
 import { getTargetRIR } from '../../src/utils/autoRegEngine';
@@ -67,12 +68,15 @@ export default function DashboardScreen() {
 
   const draftCompletedSets = matchingDraft
     ? matchingDraft.workoutExercises.reduce(
-        (acc, ex) => acc + ex.sets.filter((s) => s.is_completed).length,
+        (acc, ex) => acc + ex.sets.filter((s) => isWorkingCompletedSet(s)).length,
         0
       )
     : 0;
   const draftTotalSets = matchingDraft
-    ? matchingDraft.workoutExercises.reduce((acc, ex) => acc + ex.sets.length, 0)
+    ? matchingDraft.workoutExercises.reduce(
+        (acc, ex) => acc + ex.sets.filter((s) => (s.set_type || 'normal') !== 'warmup').length,
+        0
+      )
     : 0;
 
   const loadDashboardData = useCallback(async () => {
@@ -640,7 +644,7 @@ export default function DashboardScreen() {
               let sessionSets = 0;
               (session.session_exercises || []).forEach((se: any) => {
                 (se.session_sets || []).forEach((st: any) => {
-                  if (st.is_completed) {
+                  if (isWorkingCompletedSet(st)) {
                     sessionSets += 1;
                     sessionTonnage += (Number(st.weight) || 0) * (Number(st.reps) || 0);
                   }

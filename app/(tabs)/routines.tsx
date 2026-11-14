@@ -116,7 +116,7 @@ export default function RoutinesScreen() {
           </Text>
           <View className="flex-row items-center gap-3">
             <TouchableOpacity 
-              onPress={() => router.push('/routine-builder/new')}
+              onPress={() => router.push({ pathname: '/routine-builder/new', params: { routineId: item.id } })}
               className="flex-row items-center"
             >
               <Text className="text-indigo-400 text-xs font-semibold mr-1">Edit Split</Text>

@@ -17,7 +17,48 @@ import {
   ArrowRightLeft,
   Zap,
 } from 'lucide-react-native';
-import { calculateEstimated1RM, MUSCLE_GROUPS } from '../../src/utils/analyticsEngine';
+import {
+  calculateEstimated1RM,
+  isWorkingCompletedSet,
+  MUSCLE_GROUPS,
+} from '../../src/utils/analyticsEngine';
+
+function renderSetBadges(st: any, isBodyweightOnly?: boolean) {
+  const sType = st.set_type || 'normal';
+  const rirVal = st.rir;
+
+  return (
+    <View className="flex-row items-center flex-wrap gap-1.5">
+      {isBodyweightOnly && (
+        <View className="bg-slate-700/80 px-1.5 py-0.5 rounded border border-slate-600/60">
+          <Text className="text-slate-200 font-bold text-[10px]">BW</Text>
+        </View>
+      )}
+      {sType === 'warmup' && (
+        <View className="bg-amber-500/20 px-1.5 py-0.5 rounded border border-amber-500/40">
+          <Text className="text-amber-300 font-bold text-[10px]">WARMUP</Text>
+        </View>
+      )}
+      {sType === 'drop' && (
+        <View className="bg-sky-500/20 px-1.5 py-0.5 rounded border border-sky-500/40">
+          <Text className="text-sky-300 font-bold text-[10px]">DROP</Text>
+        </View>
+      )}
+      {sType === 'failure' && (
+        <View className="bg-rose-500/20 px-1.5 py-0.5 rounded border border-rose-500/40">
+          <Text className="text-rose-300 font-bold text-[10px]">FAIL</Text>
+        </View>
+      )}
+      {rirVal !== null && rirVal !== undefined && (
+        <View className="bg-indigo-500/20 px-1.5 py-0.5 rounded border border-indigo-500/40">
+          <Text className="text-indigo-200 font-bold text-[10px]">
+            {Number(rirVal) >= 4 ? '4+' : rirVal} RIR
+          </Text>
+        </View>
+      )}
+    </View>
+  );
+}
 
 export default function SessionDetailScreen() {
   const { id } = useLocalSearchParams();
@@ -107,7 +148,7 @@ export default function SessionDetailScreen() {
       se.exercises?.exercise_muscle_groups || [];
 
     (se.session_sets || []).forEach((st: any) => {
-      if (st.is_completed) {
+      if (isWorkingCompletedSet(st)) {
         completedSetsCount++;
         const w = Number(st.weight) || 0;
         const r = Number(st.reps) || 0;
@@ -146,7 +187,7 @@ export default function SessionDetailScreen() {
   if (previousCycleSession) {
     (previousCycleSession.session_exercises || []).forEach((se: any) => {
       (se.session_sets || []).forEach((st: any) => {
-        if (st.is_completed) {
+        if (isWorkingCompletedSet(st)) {
           prevTotalVolume += (Number(st.weight) || 0) * (Number(st.reps) || 0);
         }
       });
@@ -313,11 +354,14 @@ export default function SessionDetailScreen() {
             const se = sessionExercises[i];
 
             if (!se.superset_id) {
-              // Calculate top e1RM for this exercise
+              // Calculate top working e1RM for this exercise (exclude warmup sets)
               let topE1RM = 0;
               let topWeight = 0;
-              (se.session_sets || []).forEach((st: any) => {
-                if (st.is_completed) {
+              const sortedSets = [...(se.session_sets || [])].sort(
+                (a: any, b: any) => (a.set_number || 0) - (b.set_number || 0)
+              );
+              sortedSets.forEach((st: any) => {
+                if (isWorkingCompletedSet(st)) {
                   const w = Number(st.weight) || 0;
                   const r = Number(st.reps) || 0;
                   const curE1RM = calculateEstimated1RM(w, r);
@@ -346,12 +390,19 @@ export default function SessionDetailScreen() {
 
                   {/* Sets list */}
                   <View className="space-y-1.5">
-                    {(se.session_sets || []).map((st: any) => (
+                    {sortedSets.map((st: any) => (
                       <View
                         key={st.id || st.set_number}
-                        className="flex-row justify-between items-center bg-slate-800/50 px-3 py-2 rounded-xl mb-1"
+                        className={`flex-row justify-between items-center px-3 py-2 rounded-xl mb-1 ${
+                          (st.set_type || 'normal') === 'warmup'
+                            ? 'bg-amber-950/20 border border-amber-500/20'
+                            : 'bg-slate-800/50'
+                        }`}
                       >
-                        <Text className="text-slate-400 font-bold text-xs">Set {st.set_number}</Text>
+                        <View className="flex-row items-center gap-2 flex-1 mr-2">
+                          <Text className="text-slate-400 font-bold text-xs">Set {st.set_number}</Text>
+                          {renderSetBadges(st, se.exercises?.is_bodyweight_only)}
+                        </View>
                         <Text className="text-white font-black text-sm">
                           {se.exercises?.is_bodyweight_only
                             ? 'Bodyweight'
@@ -362,7 +413,7 @@ export default function SessionDetailScreen() {
                     ))}
                   </View>
 
-                  {se.next_target_weight && (
+                  {(se.next_target_weight || (se.exercises?.is_bodyweight_only && se.next_target_reps)) && (
                     <View className="mt-3 pt-2.5 border-t border-slate-800 flex-row items-center justify-between">
                       <View className="flex-row items-center">
                         <Sparkles color="#a78bfa" size={14} className="mr-1.5" />
@@ -371,7 +422,9 @@ export default function SessionDetailScreen() {
                         </Text>
                       </View>
                       <Text className="text-white font-bold text-xs">
-                        {se.next_target_weight} lbs
+                        {se.exercises?.is_bodyweight_only && se.next_target_reps
+                          ? `${se.next_target_reps} reps`
+                          : `${se.next_target_weight} lbs`}
                       </Text>
                     </View>
                   )}
@@ -381,7 +434,9 @@ export default function SessionDetailScreen() {
               processedSupersets.add(se.superset_id);
               const sId = se.superset_id;
               const letter = supersetLetterMap[sId] || 'A';
-              const groupItems = sessionExercises.filter((item: any) => item.superset_id === sId);
+              const groupItems = sessionExercises
+                .filter((item: any) => item.superset_id === sId)
+                .sort((a: any, b: any) => (a.superset_order || 1) - (b.superset_order || 1));
 
               elements.push(
                 <View
@@ -405,6 +460,9 @@ export default function SessionDetailScreen() {
 
                   {groupItems.map((groupEx: any, subIdx: number) => {
                     const tag = `${letter}${groupEx.superset_order || subIdx + 1}`;
+                    const sortedSets = [...(groupEx.session_sets || [])].sort(
+                      (a: any, b: any) => (a.set_number || 0) - (b.set_number || 0)
+                    );
                     return (
                       <View
                         key={groupEx.id || `sub_${subIdx}`}
@@ -420,14 +478,21 @@ export default function SessionDetailScreen() {
                         </View>
 
                         <View className="space-y-1">
-                          {(groupEx.session_sets || []).map((st: any) => (
+                          {sortedSets.map((st: any) => (
                             <View
                               key={st.id || st.set_number}
-                              className="flex-row justify-between items-center bg-slate-800/50 px-3 py-2 rounded-xl mb-1"
+                              className={`flex-row justify-between items-center px-3 py-2 rounded-xl mb-1 ${
+                                (st.set_type || 'normal') === 'warmup'
+                                  ? 'bg-amber-950/20 border border-amber-500/20'
+                                  : 'bg-slate-800/50'
+                              }`}
                             >
-                              <Text className="text-slate-400 font-bold text-xs">
-                                Set {st.set_number}
-                              </Text>
+                              <View className="flex-row items-center gap-2 flex-1 mr-2">
+                                <Text className="text-slate-400 font-bold text-xs">
+                                  Set {st.set_number}
+                                </Text>
+                                {renderSetBadges(st, groupEx.exercises?.is_bodyweight_only)}
+                              </View>
                               <Text className="text-white font-black text-sm">
                                 {groupEx.exercises?.is_bodyweight_only
                                   ? 'Bodyweight'
@@ -438,7 +503,8 @@ export default function SessionDetailScreen() {
                           ))}
                         </View>
 
-                        {groupEx.next_target_weight && (
+                        {(groupEx.next_target_weight ||
+                          (groupEx.exercises?.is_bodyweight_only && groupEx.next_target_reps)) && (
                           <View className="mt-2.5 pt-2 border-t border-slate-800 flex-row items-center justify-between">
                             <View className="flex-row items-center">
                               <Sparkles color="#a78bfa" size={12} className="mr-1" />
@@ -447,7 +513,9 @@ export default function SessionDetailScreen() {
                               </Text>
                             </View>
                             <Text className="text-white font-bold text-xs">
-                              {groupEx.next_target_weight} lbs
+                              {groupEx.exercises?.is_bodyweight_only && groupEx.next_target_reps
+                                ? `${groupEx.next_target_reps} reps`
+                                : `${groupEx.next_target_weight} lbs`}
                             </Text>
                           </View>
                         )}

@@ -16,6 +16,7 @@ interface RadarChartProps {
   size?: number;
   completedColor?: string;
   targetColor?: string;
+  targetLegendLabel?: string;
 }
 
 export const RadarChart: React.FC<RadarChartProps> = ({
@@ -25,6 +26,7 @@ export const RadarChart: React.FC<RadarChartProps> = ({
   size = 260,
   completedColor = '#818cf8', // indigo-400
   targetColor = '#10b981', // emerald-500
+  targetLegendLabel = 'Target Goal',
 }) => {
   if (!data || data.length < 3) {
     return null;
@@ -183,7 +185,7 @@ export const RadarChart: React.FC<RadarChartProps> = ({
         {hasTargets && (
           <View className="flex-row items-center">
             <View className="w-3 h-3 rounded-full bg-emerald-400 mr-1.5" />
-            <Text className="text-slate-300 text-xs font-semibold">Target Goal</Text>
+            <Text className="text-slate-300 text-xs font-semibold">{targetLegendLabel}</Text>
           </View>
         )}
       </View>

@@ -23,6 +23,15 @@ export const MUSCLE_GROUPS = [
 
 export type MuscleGroup = (typeof MUSCLE_GROUPS)[number];
 
+export type SetType = 'normal' | 'warmup' | 'drop' | 'failure';
+
+/**
+ * Canonical filter returning true only for completed working sets (excluding warmup sets).
+ */
+export function isWorkingCompletedSet(st: any): boolean {
+  return Boolean(st?.is_completed && (st?.set_type || 'normal') !== 'warmup');
+}
+
 export interface PREntry {
   exerciseId: string;
   exerciseName: string;
@@ -68,7 +77,7 @@ export interface WeeklyVolumePoint {
 export interface MuscleGroupStatus {
   muscleGroup: string;
   weeklySets: number;
-  status: 'low' | 'optimal' | 'high';
+  status: 'none' | 'low' | 'moderate' | 'optimal' | 'high';
   statusText: string;
   color: string;
 }
@@ -162,7 +171,7 @@ export function extractPersonalRecords(sessions: any[]): PREntry[] {
       }
 
       (se.session_sets || []).forEach((st: any) => {
-        if (!st.is_completed) return;
+        if (!isWorkingCompletedSet(st)) return;
         const w = Number(st.weight) || 0;
         const r = Number(st.reps) || 0;
         const setVolume = w * r;
@@ -223,7 +232,7 @@ export function getExerciseE1RMHistory(
       let bestReps = 0;
 
       (se.session_sets || []).forEach((st: any) => {
-        if (!st.is_completed) return;
+        if (!isWorkingCompletedSet(st)) return;
         const w = Number(st.weight) || 0;
         const r = Number(st.reps) || 0;
         if (w <= 0 || r <= 0) return;
@@ -270,7 +279,7 @@ export function getSessionVolumeHistory(sessions: any[]): VolumeDataPoint[] {
 
     (session.session_exercises || []).forEach((se: any) => {
       (se.session_sets || []).forEach((st: any) => {
-        if (st.is_completed) {
+        if (isWorkingCompletedSet(st)) {
           sets += 1;
           const w = Number(st.weight) || 0;
           const r = Number(st.reps) || 0;
@@ -363,7 +372,7 @@ export function getWeeklyVolumeHistory(
         se.exercises?.exercise_muscle_groups || [];
 
       (se.session_sets || []).forEach((st: any) => {
-        if (!st.is_completed) return;
+        if (!isWorkingCompletedSet(st)) return;
         const w = Number(st.weight) || 0;
         const r = Number(st.reps) || 0;
         weekMap[key].totalSets += 1;
@@ -386,17 +395,39 @@ export function getWeeklyVolumeHistory(
 }
 
 /**
- * Exercise Science Hypertrophy Volume Status:
- * Evaluates weekly direct+indirect sets against literature-backed ranges:
- * - < 6 sets/week: Low / Maintenance (sub-optimal for hypertrophy)
- * - 6-12 sets/week: Moderate (Minimum Effective Volume - MEV)
- * - 12-20 sets/week: Optimal Hypertrophy Range (Maximum Adaptive Volume - MAV)
- * - > 20 sets/week: High / Maximum Recoverable Volume (MRV risk of overreaching)
+ * Exercise Science Hypertrophy Volume Status (ACSM Umbrella Review Landmarks):
+ * - 0 sets/week: No Stimulus (0s)
+ * - >0 to <6 sets/week: Low / Maintenance (<6s)
+ * - 6 to <10 sets/week: Moderate (6–9.5s)
+ * - 10 to 22 sets/week: Optimal Hypertrophy (10–22s)
+ * - >22 sets/week: High Fatigue (>22s)
  */
 export function evaluateHypertrophyVolume(weeklySets: number): MuscleGroupStatus['status'] {
+  if (weeklySets <= 0) return 'none';
   if (weeklySets < 6) return 'low';
-  if (weeklySets <= 20) return 'optimal';
+  if (weeklySets < 10) return 'moderate';
+  if (weeklySets <= 22) return 'optimal';
   return 'high';
+}
+
+export function getHypertrophyVolumeMeta(weeklySets: number): {
+  status: MuscleGroupStatus['status'];
+  statusText: string;
+  color: string;
+} {
+  const status = evaluateHypertrophyVolume(weeklySets);
+  switch (status) {
+    case 'none':
+      return { status, statusText: 'No Stimulus (0s)', color: '#64748b' };
+    case 'low':
+      return { status, statusText: 'Low / Maintenance (<6s)', color: '#f59e0b' };
+    case 'moderate':
+      return { status, statusText: 'Moderate (6–9.5s)', color: '#38bdf8' };
+    case 'optimal':
+      return { status, statusText: 'Optimal Hypertrophy (10–22s)', color: '#10b981' };
+    case 'high':
+      return { status, statusText: 'High Fatigue (>22s)', color: '#f43f5e' };
+  }
 }
 
 export function getMuscleGroupVolumeStatusList(
@@ -404,17 +435,7 @@ export function getMuscleGroupVolumeStatusList(
 ): MuscleGroupStatus[] {
   return MUSCLE_GROUPS.map((mg) => {
     const sets = Math.round((currentWeeklySets[mg] || 0) * 10) / 10;
-    const status = evaluateHypertrophyVolume(sets);
-    let statusText = 'Optimal Volume (MAV)';
-    let color = '#10b981'; // emerald-500
-
-    if (status === 'low') {
-      statusText = sets === 0 ? 'No Stimulus' : 'Sub-Optimal (<6s)';
-      color = '#f59e0b'; // amber-500
-    } else if (status === 'high') {
-      statusText = 'High Fatigue (>20s)';
-      color = '#ef4444'; // red-500
-    }
+    const { status, statusText, color } = getHypertrophyVolumeMeta(sets);
 
     return {
       muscleGroup: mg,
@@ -479,7 +500,7 @@ export function analyzeCycleProgression(
       }
 
       (se.session_sets || []).forEach((st: any) => {
-        if (st.is_completed) {
+        if (isWorkingCompletedSet(st)) {
           completedSets++;
           const w = Number(st.weight) || 0;
           const r = Number(st.reps) || 0;

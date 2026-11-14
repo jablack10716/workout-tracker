@@ -48,6 +48,7 @@ export default function AnalyticsScreen() {
   const [personalRecords, setPersonalRecords] = useState<PREntry[]>([]);
   const [selectedExerciseId, setSelectedExerciseId] = useState<string | null>(null);
   const [timeRangeWeeks, setTimeRangeWeeks] = useState<number>(12);
+  const [activeRoutineTargets, setActiveRoutineTargets] = useState<Record<string, number> | null>(null);
   const [exporting, setExporting] = useState(false);
 
   const loadAnalyticsData = useCallback(async () => {
@@ -58,13 +59,24 @@ export default function AnalyticsScreen() {
     const userId = authSession?.user?.id;
 
     if (userId) {
-      const { data: sessionData, error } = await supabase
-        .from('sessions')
-        .select(
-          '*, routines(name), session_exercises(*, exercises(id, name, is_bodyweight_only, exercise_muscle_groups(*)), session_sets(*))'
-        )
-        .eq('user_id', userId)
-        .order('started_at', { ascending: true });
+      const [{ data: sessionData, error }, { data: activeRoutine }] = await Promise.all([
+        supabase
+          .from('sessions')
+          .select(
+            '*, routines(name), session_exercises(*, exercises(id, name, is_bodyweight_only, exercise_muscle_groups(*)), session_sets(*))'
+          )
+          .eq('user_id', userId)
+          .order('started_at', { ascending: true }),
+        supabase
+          .from('routines')
+          .select(
+            'id, routine_days(routine_exercises(planned_sets, exercises(exercise_muscle_groups(muscle_group, fraction))))'
+          )
+          .eq('user_id', userId)
+          .eq('status', 'active')
+          .limit(1)
+          .maybeSingle(),
+      ]);
 
       if (!error && sessionData) {
         setSessions(sessionData);
@@ -76,6 +88,30 @@ export default function AnalyticsScreen() {
         if (prs.length > 0 && !selectedExerciseId) {
           setSelectedExerciseId(prs[0].exerciseId);
         }
+      }
+
+      if (activeRoutine) {
+        const targets: Record<string, number> = {};
+        MUSCLE_GROUPS.forEach((mg) => {
+          targets[mg] = 0;
+        });
+
+        (activeRoutine.routine_days || []).forEach((day: any) => {
+          (day.routine_exercises || []).forEach((re: any) => {
+            const plannedSets = Number(re.planned_sets) || 0;
+            (re.exercises?.exercise_muscle_groups || []).forEach((m: any) => {
+              const grp = m.muscle_group;
+              const frac = Number(m.fraction) || 1.0;
+              if (targets[grp] !== undefined) {
+                targets[grp] += plannedSets * frac;
+              }
+            });
+          });
+        });
+
+        setActiveRoutineTargets(targets);
+      } else {
+        setActiveRoutineTargets(null);
       }
     }
     setLoading(false);
@@ -128,7 +164,10 @@ export default function AnalyticsScreen() {
   const muscleRadarData = MUSCLE_GROUPS.map((mg) => ({
     label: mg,
     value: Math.round((currentWeekMuscleSets[mg] || 0) * 10) / 10,
-    target: 14, // Exercise science target baseline: ~12-16 sets/week for hypertrophy
+    target:
+      activeRoutineTargets !== null
+        ? Math.round((activeRoutineTargets[mg] || 0) * 10) / 10
+        : 12,
   }));
 
   const muscleStatuses = getMuscleGroupVolumeStatusList(currentWeekMuscleSets);
@@ -141,7 +180,7 @@ export default function AnalyticsScreen() {
       return;
     }
 
-    let csvContent = 'Date,Routine,Cycle,Exercise,Set,Weight(lbs),Reps,Completed,Estimated1RM(lbs)\n';
+    let csvContent = 'Date,Routine,Cycle,Exercise,Set,Weight(lbs),Reps,Completed,Estimated1RM(lbs),SetType,RIR\n';
     sessions.forEach((s) => {
       const date = new Date(s.started_at).toISOString().split('T')[0];
       const routineName = s.routines?.name || 'Workout';
@@ -152,8 +191,10 @@ export default function AnalyticsScreen() {
         (se.session_sets || []).forEach((st: any) => {
           const w = Number(st.weight) || 0;
           const r = Number(st.reps) || 0;
-          const e1rm = calculateEstimated1RM(w, r);
-          csvContent += `"${date}","${routineName}",${cycleNum},"${exName}",${st.set_number},${w},${r},${st.is_completed},${e1rm}\n`;
+          const setType = st.set_type || 'normal';
+          const rirCell = st.rir !== null && st.rir !== undefined ? String(st.rir) : '';
+          const e1rm = setType === 'warmup' ? 0 : calculateEstimated1RM(w, r);
+          csvContent += `"${date}","${routineName}",${cycleNum},"${exName}",${st.set_number},${w},${r},${st.is_completed},${e1rm},"${setType}",${rirCell}\n`;
         });
       });
     });
@@ -353,7 +394,7 @@ export default function AnalyticsScreen() {
             <View>
               <Text className="text-white text-lg font-bold">Hypertrophy Volume Balance</Text>
               <Text className="text-slate-400 text-xs">
-                Weekly working sets vs Maximum Adaptive Volume (MAV: 12-20s)
+                Weekly working sets vs ACSM Optimal Hypertrophy Zone (10–22s)
               </Text>
             </View>
           </View>
@@ -364,6 +405,9 @@ export default function AnalyticsScreen() {
               data={muscleRadarData}
               title="7-Muscle Group Volumetric Matrix"
               subtitle="Fractional weekly volume distribution"
+              targetLegendLabel={
+                activeRoutineTargets !== null ? 'Active Split Target' : 'ACSM Baseline (12s)'
+              }
               size={280}
             />
           </View>

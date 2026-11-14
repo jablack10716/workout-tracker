@@ -3,6 +3,7 @@ import { View, Text, TouchableOpacity, ScrollView, ActivityIndicator } from 'rea
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { supabase } from '../../src/lib/supabase';
 import { useActiveWorkoutStore } from '../../src/store/useActiveWorkoutStore';
+import { isWorkingCompletedSet } from '../../src/utils/analyticsEngine';
 import { Trophy, Flame, Dumbbell, Clock, ArrowRight, CheckCircle, AlertCircle, RefreshCw } from 'lucide-react-native';
 
 export default function WorkoutCompleteScreen() {
@@ -90,7 +91,7 @@ export default function WorkoutCompleteScreen() {
 
       workoutPayload.forEach((ex: any) => {
         ex.sets?.forEach((s: any) => {
-          if (s.is_completed) {
+          if (isWorkingCompletedSet(s)) {
             completedSetsSum++;
             const w = parseFloat(s.weight) || 0;
             const r = parseInt(s.reps, 10) || 0;
@@ -182,18 +183,34 @@ export default function WorkoutCompleteScreen() {
 
       // 2. Insert Session Exercises & Sets
       for (const ex of workoutPayload) {
+        const workingSets = (ex.sets || []).filter((s: any) => isWorkingCompletedSet(s));
+
         let resolvedTargetWeight: number | null = null;
         if (!ex.is_bodyweight_only) {
           const parsed = parseFloat(ex.next_target_weight);
           if (!isNaN(parsed) && parsed > 0) {
             resolvedTargetWeight = parsed;
           } else {
-            const completedSets = (ex.sets || []).filter((s: any) => s.is_completed);
-            const weights = completedSets
+            const weights = workingSets
               .map((s: any) => parseFloat(s.weight))
               .filter((w: any) => !isNaN(w) && w > 0);
             if (weights.length > 0) {
               resolvedTargetWeight = Math.max(...weights);
+            }
+          }
+        }
+
+        let resolvedTargetReps: number | null = null;
+        if (ex.is_bodyweight_only) {
+          const parsedReps = parseInt(ex.next_target_reps, 10);
+          if (!isNaN(parsedReps) && parsedReps > 0) {
+            resolvedTargetReps = parsedReps;
+          } else {
+            const repsList = workingSets
+              .map((s: any) => parseInt(s.reps, 10))
+              .filter((r: any) => !isNaN(r) && r > 0);
+            if (repsList.length > 0) {
+              resolvedTargetReps = Math.max(...repsList);
             }
           }
         }
@@ -218,6 +235,7 @@ export default function WorkoutCompleteScreen() {
                 session_id: sessionId,
                 exercise_id: ex.exercise_id,
                 next_target_weight: resolvedTargetWeight,
+                next_target_reps: resolvedTargetReps,
                 superset_id: ex.superset_id || null,
                 superset_order: ex.superset_order || 1,
               },
@@ -238,6 +256,7 @@ export default function WorkoutCompleteScreen() {
                     session_id: sessionId,
                     exercise_id: ex.exercise_id,
                     next_target_weight: resolvedTargetWeight,
+                    next_target_reps: resolvedTargetReps,
                   },
                 ])
                 .select()
@@ -273,32 +292,96 @@ export default function WorkoutCompleteScreen() {
           weight: parseFloat(s.weight) || 0,
           reps: parseInt(s.reps, 10) || 0,
           is_completed: s.is_completed,
+          set_type: s.set_type || 'normal',
+          rir: s.rir !== undefined && s.rir !== null ? Number(s.rir) : null,
         }));
 
         if (setRows.length > 0) {
           const { error: setsErr } = await supabase.from('session_sets').insert(setRows);
-          if (setsErr) throw setsErr;
+          if (setsErr) {
+            if (
+              setsErr.message?.includes('set_type') ||
+              setsErr.message?.includes('rir') ||
+              setsErr.message?.includes('schema cache') ||
+              setsErr.details?.includes('set_type') ||
+              setsErr.details?.includes('rir')
+            ) {
+              const legacyRows = setRows.map(({ set_type, rir, ...rest }: any) => rest);
+              const { error: legacySetsErr } = await supabase.from('session_sets').insert(legacyRows);
+              if (legacySetsErr) throw legacySetsErr;
+            } else {
+              throw setsErr;
+            }
+          }
         }
 
-        // Sync target weight back to routine_exercises
-        if (resolvedTargetWeight !== null && !ex.is_bodyweight_only) {
-          if (ex.routine_exercise_id) {
-            await supabase
-              .from('routine_exercises')
-              .update({ target_weight: resolvedTargetWeight })
-              .eq('id', ex.routine_exercise_id);
-          }
+        // Sync progressive overload target back to routine_exercises (never overwrite for session-only Swapped lifts)
+        if (!ex.is_swapped) {
+          const updateRoutineTargetRow = async (payload: Record<string, any>) => {
+            const runUpdateWithFallback = async (
+              buildQuery: (p: Record<string, any>) => any
+            ): Promise<{ rows: any[] | null; error: any }> => {
+              const { data, error } = await buildQuery(payload).select('id');
+              if (
+                error &&
+                (error.message?.includes('target_rep_min') ||
+                  error.message?.includes('target_rep_max') ||
+                  error.message?.includes('schema cache'))
+              ) {
+                const { target_rep_min, target_rep_max, ...legacyPayload } = payload;
+                if (Object.keys(legacyPayload).length === 0) {
+                  return { rows: [], error: null };
+                }
+                const retry = await buildQuery(legacyPayload).select('id');
+                return { rows: retry.data, error: retry.error };
+              }
+              return { rows: data, error };
+            };
 
-          if (routineDayIds.length > 0 && ex.exercise_id) {
-            try {
-              await supabase
-                .from('routine_exercises')
-                .update({ target_weight: resolvedTargetWeight })
-                .in('routine_day_id', routineDayIds)
-                .eq('exercise_id', ex.exercise_id);
-            } catch (syncErr) {
-              console.warn('Error syncing target weight to routine days:', syncErr);
+            let matchedById = false;
+            if (ex.routine_exercise_id) {
+              const { rows } = await runUpdateWithFallback((p) =>
+                supabase.from('routine_exercises').update(p).eq('id', ex.routine_exercise_id)
+              );
+              matchedById = Boolean(rows && rows.length > 0);
             }
+
+            // Guardrail #4: if routine_exercises was replaced by Edit Split (0 rows affected by ID),
+            // match by (routine_day_id, exercise_id).
+            if (!matchedById && routineDayId && ex.exercise_id) {
+              await runUpdateWithFallback((p) =>
+                supabase
+                  .from('routine_exercises')
+                  .update(p)
+                  .eq('routine_day_id', routineDayId)
+                  .eq('exercise_id', ex.exercise_id)
+              );
+            }
+
+            if (routineDayIds.length > 0 && ex.exercise_id) {
+              try {
+                await runUpdateWithFallback((p) =>
+                  supabase
+                    .from('routine_exercises')
+                    .update(p)
+                    .in('routine_day_id', routineDayIds)
+                    .eq('exercise_id', ex.exercise_id)
+                );
+              } catch (syncErr) {
+                console.warn('Error syncing target across routine days:', syncErr);
+              }
+            }
+          };
+
+          if (!ex.is_bodyweight_only && resolvedTargetWeight !== null) {
+            await updateRoutineTargetRow({ target_weight: resolvedTargetWeight });
+          } else if (ex.is_bodyweight_only && resolvedTargetReps !== null) {
+            const clampedMin = Math.min(ex.target_rep_min ?? resolvedTargetReps, resolvedTargetReps);
+            await updateRoutineTargetRow({
+              target_reps: resolvedTargetReps,
+              target_rep_min: clampedMin,
+              target_rep_max: resolvedTargetReps,
+            });
           }
         }
       }

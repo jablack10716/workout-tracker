@@ -3,10 +3,11 @@ import { View, Text, TextInput, TouchableOpacity, ScrollView, Alert, ActivityInd
 import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { supabase } from '../src/lib/supabase';
-import { usePreferencesStore, RestDurationOption } from '../src/store/usePreferencesStore';
+import { usePreferencesStore, RestDurationOption, SupersetTransitionSeconds } from '../src/store/usePreferencesStore';
 import { X, User, Bell, LogOut, Check, Database } from 'lucide-react-native';
 
 const REST_OPTIONS: readonly RestDurationOption[] = [60, 90, 120, 180];
+const TRANSITION_OPTIONS: readonly SupersetTransitionSeconds[] = [0, 15, 30, 45];
 
 export default function SettingsScreen() {
   const router = useRouter();
@@ -15,6 +16,8 @@ export default function SettingsScreen() {
   const [displayName, setDisplayName] = useState('');
   const defaultTimer = usePreferencesStore((s) => s.defaultRestSeconds);
   const setDefaultTimer = usePreferencesStore((s) => s.setDefaultRestSeconds);
+  const supersetTransitionSeconds = usePreferencesStore((s) => s.supersetTransitionSeconds);
+  const setSupersetTransitionSeconds = usePreferencesStore((s) => s.setSupersetTransitionSeconds);
   const hapticsEnabled = usePreferencesStore((s) => s.hapticsEnabled);
   const setHapticsEnabled = usePreferencesStore((s) => s.setHapticsEnabled);
   const [loading, setLoading] = useState(false);
@@ -118,7 +121,7 @@ export default function SettingsScreen() {
           </View>
 
           <Text className="text-slate-400 text-sm mb-3">Default Rest Duration for New Exercises:</Text>
-          <View className="flex-row justify-between mb-4">
+          <View className="flex-row justify-between mb-5">
             {REST_OPTIONS.map((seconds) => (
               <TouchableOpacity
                 key={seconds}
@@ -131,6 +134,28 @@ export default function SettingsScreen() {
               >
                 <Text className={`font-bold ${defaultTimer === seconds ? 'text-purple-300' : 'text-slate-400'}`}>
                   {seconds}s
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+
+          <Text className="text-slate-400 text-sm mb-1">Superset Transition Breather:</Text>
+          <Text className="text-slate-500 text-xs mb-3">
+            Brief countdown between paired lifts before the full end-of-round rest timer.
+          </Text>
+          <View className="flex-row justify-between mb-4">
+            {TRANSITION_OPTIONS.map((seconds) => (
+              <TouchableOpacity
+                key={seconds}
+                onPress={() => setSupersetTransitionSeconds(seconds)}
+                className={`px-4 py-2 rounded-xl border ${
+                  supersetTransitionSeconds === seconds
+                    ? 'bg-cyan-600/30 border-cyan-500'
+                    : 'bg-slate-800/40 border-slate-700/50'
+                }`}
+              >
+                <Text className={`font-bold ${supersetTransitionSeconds === seconds ? 'text-cyan-300' : 'text-slate-400'}`}>
+                  {seconds === 0 ? 'Off' : `${seconds}s`}
                 </Text>
               </TouchableOpacity>
             ))}

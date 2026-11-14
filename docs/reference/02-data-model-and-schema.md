@@ -1,7 +1,7 @@
 > **Reference Pack Metadata**
 > - **App Name:** Best Damn Weight Lifting Tracker Ever (`weightliftinglog` / UI Banner: *Best Damn Workout Tracker Ever*)
-> - **Git Commit SHA & Branch:** `9a6f80e` (`main`) + Phase 1 Working Tree Updates — Base Commit `2026-09-30 18:54:32 -0500`
-> - **Snapshot Date:** `2026-11-13`
+> - **Git Commit SHA & Branch:** `9a6f80e` (`main`) + Phase 1 & Phase 2 Working Tree Updates — Base Commit `2026-09-30 18:54:32 -0500`
+> - **Snapshot Date:** `2026-11-14`
 > - **File Scope:** Complete PostgreSQL & client-side storage inventory, table columns/types/constraints/indexes, RLS security model, Mermaid ER diagram, migration history, seed catalog, and import/export capabilities.
 
 # 02 — Data Model & Schema
@@ -12,7 +12,7 @@
 | :--- | :--- | :--- |
 | **PostgreSQL Tables (`public`)** | **8** | `exercises`, `exercise_muscle_groups`, `routines`, `routine_days`, `routine_exercises`, `sessions`, `session_exercises`, `session_sets` (plus FK dependency on `auth.users`) |
 | **PostgreSQL Custom Enums** | **3** | `routine_status`, `muscle_group`, `session_status` |
-| **SQL Migrations** | **7** | Sequential additive DDL, RLS hardening, & data-safety scripts in `supabase/migrations/` |
+| **SQL Migrations** | **8** | Sequential additive DDL, RLS hardening, data-safety, & Phase 2 programming scripts in `supabase/migrations/` |
 | **Client-Side Zustand Stores** | **2** | `useActiveWorkoutStore` (`src/store/useActiveWorkoutStore.ts`) & `usePreferencesStore` (`src/store/usePreferencesStore.ts`) |
 | **AsyncStorage Namespaces** | **3** | `@supabase/supabase-js` Auth JWT session, `'weightlifting-active-workout-v1'`, and `'weightlifting-preferences-v1'` |
 
@@ -65,12 +65,12 @@ Top-level training split configuration and active sequential queue pointer (`cur
 | `user_id` | `UUID` | `NOT NULL` | — | `REFERENCES auth.users(id) ON DELETE CASCADE` |
 | `name` | `TEXT` | `NOT NULL` | — | Routine display title |
 | `status` | `routine_status` | `NOT NULL` | `'draft'` | App enforces single `'active'` routine in client code (no partial unique DB index) |
-| `days_in_split` | `INTEGER` | `NOT NULL` | — | `CHECK (days_in_split BETWEEN 3 AND 7)` |
+| `days_in_split` | `INTEGER` | `NOT NULL` | — | `CHECK (days_in_split BETWEEN 2 AND 7)` (relaxed from `3..7` in migration 8) |
 | `cycles_per_routine` | `INTEGER` | `NOT NULL` | — | `CHECK (cycles_per_routine >= 1)` |
-| `current_day` | `INTEGER` | `NOT NULL` | `1` | Horizontal queue pointer (`1 .. days_in_split`) |
+| `current_day` | `INTEGER` | `NOT NULL` | `1` | Horizontal queue pointer (`1 .. days_in_split`; clamped when shortening split on edit) |
 | `current_cycle` | `INTEGER` | `NOT NULL` | `1` | Current rotation cycle (`1 .. N`) |
 | `created_at` | `TIMESTAMPTZ` | `NULL` | `NOW()` | Creation timestamp |
-| `updated_at` | `TIMESTAMPTZ` | `NULL` | `NOW()` | Updated on routine creation & workout completion |
+| `updated_at` | `TIMESTAMPTZ` | `NULL` | `NOW()` | Updated on routine creation, edit & workout completion |
 
 ### 3.4 `routine_days`
 Discrete split days belonging to a routine (`1 .. days_in_split`).
@@ -82,10 +82,10 @@ Discrete split days belonging to a routine (`1 .. days_in_split`).
 | `day_number` | `INTEGER` | `NOT NULL` | — | `1`-based split index; `UNIQUE (routine_id, day_number)` |
 | `name` | `TEXT` | `NULL` | — | Custom split day label added in migration 7 (`20261113000000_data_safety_and_day_names.sql`) |
 
-> **Schema Compatibility Note:** `app/routine-builder/new.tsx` persists `day.name` into `routine_days.name` and includes a safe fallback retry without `name` if a remote PostgREST schema cache lags behind migration 7 (matching the existing `superset_id` fallback pattern).
+> **Schema & Edit-Mode Compatibility Note:** `app/routine-builder/new.tsx` persists `day.name` into `routine_days.name` with a safe fallback retry if a remote PostgREST schema cache lags behind migration 7. When editing an existing routine, `new.tsx` upserts `routine_days` on `(routine_id, day_number)` instead of deleting/recreating rows, preserving existing `routine_day_id` UUIDs referenced by historical `sessions`, and deletes only `day_number > newDaysInSplit`.
 
 ### 3.5 `routine_exercises`
-Ordered exercise prescriptions within a specific `routine_days` record, including superset grouping metadata.
+Ordered exercise prescriptions within a specific `routine_days` record, including rep ranges and superset grouping metadata.
 
 | Column | Type | Nullable | Default | Constraints & Foreign Keys |
 | :--- | :--- | :--- | :--- | :--- |
@@ -95,7 +95,9 @@ Ordered exercise prescriptions within a specific `routine_days` record, includin
 | `order_index` | `INTEGER` | `NOT NULL` | — | `1`-based position within day; `UNIQUE (routine_day_id, order_index)` |
 | `planned_sets` | `INTEGER` | `NOT NULL` | — | `CHECK (planned_sets >= 1)` |
 | `target_weight` | `DECIMAL(6,2)` | `NULL` | — | Baseline target load (`lbs` in UI); updated on workout completion |
-| `target_reps` | `INTEGER` | `NULL` | — | Target reps per set (default `10` in UI) |
+| `target_reps` | `INTEGER` | `NULL` | — | Target reps per set (synced with upper rep range / bodyweight overload) |
+| `target_rep_min` | `INTEGER` | `NULL` | — | Added & backfilled in migration 8; `CHECK >= 1` & `<= target_rep_max` (`routine_exercises_rep_range_check`) |
+| `target_rep_max` | `INTEGER` | `NULL` | — | Added & backfilled in migration 8; `CHECK >= 1` & `>= target_rep_min` |
 | `superset_id` | `TEXT` | `NULL` | `NULL` | Added in migration 5 (`ss_<timestamp>_<rand>`); links paired exercises |
 | `superset_order` | `INTEGER` | `NULL` | `1` | Added in migration 5; `1`-based order inside superset (`A1`, `A2`, ...) |
 
@@ -115,16 +117,16 @@ Historical workout session header tying a user's completed workout to a user acc
 | `duration_seconds` | `INTEGER` | `NULL` | — | Added in migration 4 (`Math.max(elapsed, 60)`) |
 
 ### 3.7 `session_exercises`
-Per-exercise record within a logged workout session, storing superset metadata and the "Fresh Memory" target load for the next cycle.
+Per-exercise record within a logged workout session, storing superset metadata and "Fresh Memory" target loads/reps for the next cycle.
 
 | Column | Type | Nullable | Default | Constraints & Foreign Keys |
 | :--- | :--- | :--- | :--- | :--- |
 | `id` | `UUID` | `NOT NULL` | `uuid_generate_v4()` | `PRIMARY KEY` |
 | `session_id` | `UUID` | `NULL` | — | `REFERENCES sessions(id) ON DELETE CASCADE` |
-| `routine_exercise_id` | `UUID` | `NULL` | — | `REFERENCES routine_exercises(id) ON DELETE SET NULL` (`session_exercises_routine_exercise_id_fkey`, updated in migration 7; app currently inserts `NULL`) |
+| `routine_exercise_id` | `UUID` | `NULL` | — | `REFERENCES routine_exercises(id) ON DELETE SET NULL` (`session_exercises_routine_exercise_id_fkey`, updated in migration 7; app inserts `NULL` and resolves routine target write-back with `(routine_day_id, exercise_id)` fallback) |
 | `exercise_id` | `UUID` | `NULL` | — | `REFERENCES exercises(id) ON DELETE CASCADE` |
-| `next_target_weight` | `DECIMAL(6,2)` | `NULL` | — | Captured during active workout for cycle `X+1` |
-| `next_target_reps` | `INTEGER` | `NULL` | — | **Unused:** app never writes this column (even for bodyweight exercises) |
+| `next_target_weight` | `DECIMAL(6,2)` | `NULL` | — | Captured during active workout for cycle `X+1` (weighted lifts) |
+| `next_target_reps` | `INTEGER` | `NULL` | — | Persisted in `complete.tsx` for bodyweight exercises and read on workout start / Swap Exercise pre-fill |
 | `superset_id` | `TEXT` | `NULL` | `NULL` | Added in migration 5 |
 | `superset_order` | `INTEGER` | `NULL` | `1` | Added in migration 5 |
 
@@ -138,8 +140,10 @@ Granular set-by-set performance log under a `session_exercises` record.
 | `set_number` | `INTEGER` | `NOT NULL` | — | `1`-based set index; `UNIQUE (session_exercise_id, set_number)` |
 | `weight` | `DECIMAL(6,2)` | `NULL` | — | Persisted as `parseFloat(s.weight) \|\| 0` (`0` for bodyweight or blank) |
 | `reps` | `INTEGER` | `NULL` | — | Persisted as `parseInt(s.reps, 10) \|\| 0` |
-| `is_completed` | `BOOLEAN` | `NOT NULL` | `FALSE` | Only `TRUE` sets count toward volume, PRs, and analytics |
-| `created_at` | `TIMESTAMPTZ` | `NULL` | `NOW()` | Used by Routine Builder to look up most recent completed weight |
+| `is_completed` | `BOOLEAN` | `NOT NULL` | `FALSE` | Must be `TRUE` (and `set_type !== 'warmup'`) to count toward working volume, PRs, e1RM, and pre-fill history |
+| `set_type` | `TEXT` | `NOT NULL` | `'normal'` | Added in migration 8 (`CHECK (set_type IN ('normal', 'warmup', 'drop', 'failure'))`) |
+| `rir` | `SMALLINT` | `NULL` | — | Added in migration 8 (`CHECK (rir BETWEEN 0 AND 5)`) |
+| `created_at` | `TIMESTAMPTZ` | `NULL` | `NOW()` | Used by Routine Builder to look up most recent completed working weight |
 | `updated_at` | `TIMESTAMPTZ` | `NULL` | `NOW()` | Timestamp |
 
 ---
@@ -213,7 +217,7 @@ erDiagram
         uuid user_id FK
         text name
         routine_status status "draft|active|completed"
-        int days_in_split "3..7"
+        int days_in_split "2..7"
         int cycles_per_routine ">=1"
         int current_day
         int current_cycle
@@ -236,6 +240,8 @@ erDiagram
         int planned_sets ">=1"
         decimal target_weight
         int target_reps
+        int target_rep_min ">=1"
+        int target_rep_max ">=target_rep_min"
         text superset_id
         int superset_order
     }
@@ -270,6 +276,8 @@ erDiagram
         decimal weight
         int reps
         boolean is_completed
+        text set_type "normal|warmup|drop|failure"
+        smallint rir "0..5"
         timestamptz created_at
         timestamptz updated_at
     }
@@ -287,10 +295,11 @@ erDiagram
 5. `20260818000000_add_superset_support.sql` — Adds `superset_id` and `superset_order` to `routine_exercises` and `session_exercises` plus lookup indexes. *(Note: `routine-builder/new.tsx` and `workout/complete.tsx` include runtime fallback catch blocks that retry inserts without `superset_id`/`superset_order` if a remote PostgREST schema cache lags behind migration 5).*
 6. `20260820000000_add_core_muscle_group.sql` — Appends `'Core'` to `public.muscle_group` enum.
 7. `20261113000000_data_safety_and_day_names.sql` — Converts `sessions.routine_id`, `sessions.routine_day_id`, and `session_exercises.routine_exercise_id` foreign keys from `ON DELETE CASCADE` to `ON DELETE SET NULL`; adds `idx_sessions_routine_day_id` & `idx_session_exercises_routine_exercise_id`; re-asserts `sessions`, `session_exercises`, and `session_sets` RLS strictly via `sessions.user_id = (select auth.uid())`; adds `routine_days.name TEXT`.
+8. `20261114000000_phase2_supersets_and_programming.sql` — Dynamically drops old `days_in_split` CHECK constraint and sets `CHECK (days_in_split BETWEEN 2 AND 7)`; adds `routine_exercises.target_rep_min` & `target_rep_max` (backfilled from `target_reps`) with `routine_exercises_rep_range_check`; adds `session_sets.set_type` (`normal | warmup | drop | failure`) and `session_sets.rir` (`SMALLINT BETWEEN 0 AND 5`); reloads PostgREST schema cache (`NOTIFY pgrst, 'reload schema'`). Client writes degrade gracefully when remote schemas lag behind migration 8.
 
 ### Client-Side Persisted Store Schema (`AsyncStorage` via Zustand)
-- **`useActiveWorkoutStore` (`weightlifting-active-workout-v1`, `src/store/useActiveWorkoutStore.ts`):** Persists `draft: ActiveWorkoutDraft | null` (`userId`, `routineId`, `routineName`, `routineDayId`, `dayNumber`, `dayName`, `cycleNumber`, `daysInSplit`, `cyclesPerRoutine`, `startedAtTimestamp`, `durationSeconds`, `workoutExercises`, `restTimerEndTimestamp`, `restTimerTotalSeconds`, `syncStatus: 'in_progress' | 'pending_sync'`, `savedSessionId`) alongside an in-memory `_hasHydrated` boolean.
-- **`usePreferencesStore` (`weightlifting-preferences-v1`, `src/store/usePreferencesStore.ts`):** Persists `defaultRestSeconds: 60 | 90 | 120 | 180` (default `90`) and `hapticsEnabled: boolean` (default `true`) alongside `_hasHydrated`.
+- **`useActiveWorkoutStore` (`weightlifting-active-workout-v1`, `src/store/useActiveWorkoutStore.ts`):** Persists `draft: ActiveWorkoutDraft | null` (`userId`, `routineId`, `routineName`, `routineDayId`, `dayNumber`, `dayName`, `cycleNumber`, `daysInSplit`, `cyclesPerRoutine`, `startedAtTimestamp`, `durationSeconds`, `workoutExercises` including per-set `set_type` & `rir` and per-exercise `target_rep_min`, `target_rep_max`, `next_target_reps`, `is_swapped`, `restTimerEndTimestamp`, `restTimerTotalSeconds`, `restTimerLabel`, `syncStatus: 'in_progress' | 'pending_sync'`, `savedSessionId`) alongside an in-memory `_hasHydrated` boolean.
+- **`usePreferencesStore` (`weightlifting-preferences-v1`, `src/store/usePreferencesStore.ts`):** Persists `defaultRestSeconds: 60 | 90 | 120 | 180` (default `90`), `supersetTransitionSeconds: 0 | 15 | 30 | 45` (default `0`), and `hapticsEnabled: boolean` (default `true`) alongside `_hasHydrated`.
 
 ### Built-In Seed Data (`supabase/seed.sql`)
 Inserts **1 system user** (`00000000-0000-0000-0000-000000000000`, `system@weightlog.local`), **12 global exercises**, and **20 muscle-group fractional rows** (note: **0** seeded exercises currently map to `'Core'`):
@@ -311,6 +320,6 @@ Inserts **1 system user** (`00000000-0000-0000-0000-000000000000`, `system@weigh
 | `...0012` | Leg Extension | `false` | `60s` | Legs | — |
 
 ### Data Import, Export & Backup Capabilities
-- **CSV Export (Web-Only, Partial Schema):** `app/analytics/index.tsx` (`handleExportCSV`) exports flat set rows (`Date,Routine,Cycle,Exercise,Set,Weight(lbs),Reps,Completed,Estimated1RM(lbs)`) using `calculateEstimated1RM` via DOM `Blob` download **only when `Platform.OS === 'web'`**. On iOS and Android, tapping **Export CSV** is a silent no-op (`expo-file-system` / `expo-sharing` are not installed). Routines, split structures, custom exercises, and muscle mappings are not exported.
+- **CSV Export (Web-Only, Partial Schema):** `app/analytics/index.tsx` (`handleExportCSV`) exports flat set rows (`Date,Routine,Cycle,Exercise,Set,Weight(lbs),Reps,Completed,Estimated1RM(lbs),SetType,RIR`, setting `Estimated1RM(lbs)` to `0` on `warmup` rows and calling `calculateEstimated1RM` otherwise) via DOM `Blob` download **only when `Platform.OS === 'web'`**. On iOS and Android, tapping **Export CSV** is a silent no-op (`expo-file-system` / `expo-sharing` are not installed). Routines, split structures, custom exercises, and muscle mappings are not exported.
 - **Data Import / Restore:** **None.** No CSV, JSON, Strong/Hevy import, or backup/restore mechanism exists.
 - **Cascade Deletion Mitigation:** Fixed in migration 7 (`20261113000000_data_safety_and_day_names.sql`): `sessions.routine_id`, `sessions.routine_day_id`, and `session_exercises.routine_exercise_id` use `ON DELETE SET NULL`, so deleting a routine or split day preserves all historical sessions, sets, and PRs under `sessions.user_id`.
