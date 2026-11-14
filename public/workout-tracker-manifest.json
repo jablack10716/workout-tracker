@@ -4,35 +4,40 @@
   "description": "Track your workouts, volume landmarks, and progressive overload.",
   "icons": [
     {
-      "src": "/favicon.ico",
-      "sizes": "64x64 32x32 24x24 16x16",
-      "type": "image/x-icon"
+      "src": "/workout-tracker-icon-48.png",
+      "sizes": "48x48",
+      "type": "image/png"
     },
     {
-      "src": "/apple-touch-icon.png",
+      "src": "/workout-tracker-icon-64.png",
+      "sizes": "64x64",
+      "type": "image/png"
+    },
+    {
+      "src": "/workout-tracker-icon-180.png",
       "sizes": "180x180",
       "type": "image/png"
     },
     {
-      "src": "/logo192.png",
+      "src": "/workout-tracker-icon-192.png",
       "sizes": "192x192",
       "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "/maskable192.png",
+      "src": "/workout-tracker-maskable-192.png",
       "sizes": "192x192",
       "type": "image/png",
       "purpose": "maskable"
     },
     {
-      "src": "/logo512.png",
+      "src": "/workout-tracker-icon-512.png",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "/maskable512.png",
+      "src": "/workout-tracker-maskable-512.png",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "maskable"

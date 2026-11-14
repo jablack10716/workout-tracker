@@ -21,7 +21,7 @@
       "predictiveBackGestureEnabled": false
     },
     "web": {
-      "favicon": "./assets/favicon.png",
+      "favicon": "./assets/workout-favicon.png",
       "shortName": "Workout Log",
       "description": "Track your workouts, volume landmarks, and progressive overload.",
       "themeColor": "#0f172a",
