@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { View, Text, TextInput, TouchableOpacity, Alert, ActivityIndicator } from 'react-native';
+import { View, Text, TextInput, TouchableOpacity, Alert, ActivityIndicator, Image } from 'react-native';
 import { supabase } from '../../src/lib/supabase';
 
 export default function LoginScreen() {
@@ -54,6 +54,14 @@ export default function LoginScreen() {
   return (
     <View className="flex-1 justify-center p-6 bg-slate-900">
       <View className="items-center mb-10">
+        <View className="p-1 rounded-3xl bg-slate-800/90 border border-cyan-500/30 shadow-lg mb-4">
+          <Image
+            source={require('../../assets/app-logo.png')}
+            style={{ width: 88, height: 88, borderRadius: 20 }}
+            resizeMode="cover"
+            accessibilityLabel="Best Damn Workout Tracker Ever icon"
+          />
+        </View>
         <Text className="text-blue-500 text-xs font-bold uppercase tracking-widest text-center mb-1">
           Best Damn Workout Tracker Ever
         </Text>

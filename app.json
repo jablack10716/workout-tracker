@@ -7,20 +7,28 @@
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "dark",
+    "backgroundColor": "#0f172a",
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "backgroundColor": "#0f172a"
     },
     "android": {
       "adaptiveIcon": {
-        "backgroundColor": "#E6F4FE",
+        "backgroundColor": "#1B2133",
         "foregroundImage": "./assets/android-icon-foreground.png",
-        "backgroundImage": "./assets/android-icon-background.png",
-        "monochromeImage": "./assets/android-icon-monochrome.png"
+        "backgroundImage": "./assets/android-icon-background.png"
       },
       "predictiveBackGestureEnabled": false
     },
     "web": {
-      "favicon": "./assets/favicon.png"
+      "favicon": "./assets/favicon.png",
+      "shortName": "Workout Log",
+      "description": "Track your workouts, volume landmarks, and progressive overload.",
+      "themeColor": "#0f172a",
+      "backgroundColor": "#020617",
+      "display": "standalone",
+      "orientation": "portrait",
+      "barStyle": "black-translucent"
     },
     "plugins": [
       "expo-router",

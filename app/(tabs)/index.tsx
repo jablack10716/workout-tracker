@@ -6,6 +6,7 @@ import {
   TouchableOpacity,
   ActivityIndicator,
   RefreshControl,
+  Image,
 } from 'react-native';
 import {
   Settings,
@@ -189,12 +190,22 @@ export default function DashboardScreen() {
       <View className="px-5 pb-12" style={{ paddingTop: Math.max(insets.top, 16) }}>
         {/* Header */}
         <View className="flex-row justify-between items-center mb-6">
-          <View className="flex-1 mr-3 min-w-0">
-            <Text className="text-blue-500 text-xs font-bold uppercase tracking-wider mb-0.5" numberOfLines={1}>
-              Best Damn Workout Tracker Ever
-            </Text>
-            <Text className="text-slate-400 text-sm">Welcome back,</Text>
-            <Text className="text-white text-2xl font-black" numberOfLines={1}>{displayName}</Text>
+          <View className="flex-row items-center flex-1 mr-3 min-w-0">
+            <View className="p-0.5 rounded-2xl bg-slate-900 border border-cyan-500/30 shadow-sm mr-3.5 shrink-0">
+              <Image
+                source={require('../../assets/app-logo.png')}
+                style={{ width: 46, height: 46, borderRadius: 14 }}
+                resizeMode="cover"
+                accessibilityLabel="App logo"
+              />
+            </View>
+            <View className="flex-1 min-w-0">
+              <Text className="text-blue-500 text-xs font-bold uppercase tracking-wider mb-0.5" numberOfLines={1}>
+                Best Damn Workout Tracker Ever
+              </Text>
+              <Text className="text-slate-400 text-sm">Welcome back,</Text>
+              <Text className="text-white text-2xl font-black" numberOfLines={1}>{displayName}</Text>
+            </View>
           </View>
           <TouchableOpacity
             onPress={() => router.push('/settings')}
