@@ -15,7 +15,7 @@ import {
   ArrowRightLeft,
   Trophy,
 } from 'lucide-react-native';
-import { calculateEstimated1RM, isWorkingCompletedSet } from '../../src/utils/analyticsEngine';
+import { calculateEstimated1RM, getSetTonnage, isWorkingCompletedSet } from '../../src/utils/analyticsEngine';
 
 export default function HistoryScreen() {
   const router = useRouter();
@@ -35,7 +35,7 @@ export default function HistoryScreen() {
     if (userId) {
       const { data, error } = await supabase
         .from('sessions')
-        .select('*, routines(name), session_exercises(*, exercises(name, is_bodyweight_only), session_sets(*))')
+        .select('*, routines(name), session_exercises(*, exercises(*), session_sets(*))')
         .eq('user_id', userId)
         .order('started_at', { ascending: false });
 
@@ -60,9 +60,10 @@ export default function HistoryScreen() {
     const dStr = new Date(s.started_at).toDateString();
     let vol = 0;
     (s.session_exercises || []).forEach((se: any) => {
+      const isUnilateral = Boolean(se.exercises?.is_unilateral);
       (se.session_sets || []).forEach((st: any) => {
         if (isWorkingCompletedSet(st)) {
-          vol += (Number(st.weight) || 0) * (Number(st.reps) || 0);
+          vol += getSetTonnage(Number(st.weight) || 0, Number(st.reps) || 0, isUnilateral);
         }
       });
     });
@@ -94,10 +95,11 @@ export default function HistoryScreen() {
   let monthlySets = 0;
   currentMonthSessions.forEach((s) => {
     (s.session_exercises || []).forEach((se: any) => {
+      const isUnilateral = Boolean(se.exercises?.is_unilateral);
       (se.session_sets || []).forEach((st: any) => {
         if (isWorkingCompletedSet(st)) {
           monthlySets++;
-          monthlyTonnage += (Number(st.weight) || 0) * (Number(st.reps) || 0);
+          monthlyTonnage += getSetTonnage(Number(st.weight) || 0, Number(st.reps) || 0, isUnilateral);
         }
       });
     });
@@ -117,12 +119,13 @@ export default function HistoryScreen() {
 
     (item.session_exercises || []).forEach((se: any) => {
       if (se.exercises?.name) exerciseNames.push(se.exercises.name);
+      const isUnilateral = Boolean(se.exercises?.is_unilateral);
       (se.session_sets || []).forEach((st: any) => {
         if (isWorkingCompletedSet(st)) {
           completedSetsCount++;
           const w = Number(st.weight) || 0;
           const r = Number(st.reps) || 0;
-          totalVolume += w * r;
+          totalVolume += getSetTonnage(w, r, isUnilateral);
           const curE1RM = calculateEstimated1RM(w, r);
           if (curE1RM > maxE1RM) maxE1RM = curE1RM;
         }

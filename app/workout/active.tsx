@@ -22,7 +22,10 @@ import {
   ActiveWorkoutSet,
   SetType,
 } from '../../src/store/useActiveWorkoutStore';
-import { usePreferencesStore } from '../../src/store/usePreferencesStore';
+import {
+  EQUIPMENT_LABELS,
+  usePreferencesStore,
+} from '../../src/store/usePreferencesStore';
 import { useExercises, Exercise } from '../../src/hooks/useExercises';
 import {
   X,
@@ -41,7 +44,16 @@ import {
   RefreshCw,
   Search,
 } from 'lucide-react-native';
-import { calculateEstimated1RM, isWorkingCompletedSet } from '../../src/utils/analyticsEngine';
+import {
+  EquipmentFilterMode,
+  calculateEstimated1RM,
+  getDefaultStartingWeight,
+  getSetTonnage,
+  isWorkingCompletedSet,
+  matchesEquipmentFilter,
+  normalizeMuscleGroup,
+  resolveExerciseEquipment,
+} from '../../src/utils/analyticsEngine';
 import { getTargetRIR } from '../../src/utils/autoRegEngine';
 import * as Haptics from 'expo-haptics';
 
@@ -66,6 +78,93 @@ function formatRepRange(min?: number | null, max?: number | null): string | null
   }
   const single = max || min;
   return single ? `${single} reps` : null;
+}
+
+function isCappedDumbbellExercise(
+  ex: Pick<ActiveWorkoutExercise, 'is_bodyweight_only' | 'equipment' | 'name'>,
+  maxDumbbellWeightLbs: number | null
+): boolean {
+  if (ex.is_bodyweight_only || !maxDumbbellWeightLbs || maxDumbbellWeightLbs <= 0) {
+    return false;
+  }
+  const eq = ex.equipment || resolveExerciseEquipment(ex);
+  return eq === 'dumbbell';
+}
+
+function isExerciseAtDbCap(
+  ex: ActiveWorkoutExercise,
+  maxDumbbellWeightLbs: number | null
+): boolean {
+  if (!isCappedDumbbellExercise(ex, maxDumbbellWeightLbs)) return false;
+  const cap = maxDumbbellWeightLbs!;
+  if ((parseFloat(ex.next_target_weight) || 0) >= cap) return true;
+  return ex.sets.some(
+    (s) => isWorkingCompletedSet(s) && (parseFloat(s.weight) || 0) >= cap
+  );
+}
+
+function recomputeAutoTargets(
+  ex: ActiveWorkoutExercise,
+  nextSets: ActiveWorkoutSet[],
+  maxDumbbellWeightLbs: number | null,
+  opts?: { clonedWeight?: string; clonedReps?: string }
+): { next_target_weight: string; next_target_reps: string } {
+  const isCappedDb = isCappedDumbbellExercise(ex, maxDumbbellWeightLbs);
+  const working = nextSets.filter((s) => isWorkingCompletedSet(s));
+
+  let nextTargetWeight = ex.next_target_weight;
+  if (!ex.is_bodyweight_only && !ex.is_target_weight_manually_edited) {
+    const completedWeights = working
+      .map((s) => parseFloat(s.weight))
+      .filter((w) => !isNaN(w) && w > 0);
+    if (completedWeights.length > 0) {
+      const rawMaxW = Math.max(...completedWeights);
+      nextTargetWeight = String(
+        isCappedDb ? Math.min(rawMaxW, maxDumbbellWeightLbs!) : rawMaxW
+      );
+    } else if (opts?.clonedWeight !== undefined) {
+      const parsedClone = parseFloat(opts.clonedWeight);
+      nextTargetWeight =
+        !isNaN(parsedClone) && parsedClone > 0 && isCappedDb
+          ? String(Math.min(parsedClone, maxDumbbellWeightLbs!))
+          : opts.clonedWeight;
+    }
+  }
+
+  let nextTargetReps = ex.next_target_reps || '';
+  if (ex.is_bodyweight_only && !ex.is_target_reps_manually_edited) {
+    const completedReps = working
+      .map((s) => parseInt(s.reps, 10))
+      .filter((r) => !isNaN(r) && r > 0);
+    if (completedReps.length > 0) {
+      nextTargetReps = String(Math.max(...completedReps));
+    } else if (opts?.clonedReps !== undefined) {
+      nextTargetReps = opts.clonedReps;
+    }
+  } else if (isCappedDb && !ex.is_target_reps_manually_edited) {
+    const cap = maxDumbbellWeightLbs!;
+    const atCapSets = working.filter((s) => (parseFloat(s.weight) || 0) >= cap);
+    if (atCapSets.length > 0) {
+      const maxRepsAtCap = Math.max(
+        0,
+        ...atCapSets.map((s) => parseInt(s.reps, 10) || 0)
+      );
+      const currentRepGoal =
+        ex.target_rep_max ??
+        ex.target_rep_min ??
+        (parseInt(ex.next_target_reps || '10', 10) || 10);
+      const promotedReps =
+        maxRepsAtCap >= currentRepGoal
+          ? Math.min(30, maxRepsAtCap + 1)
+          : Math.max(currentRepGoal, maxRepsAtCap);
+      nextTargetReps = String(promotedReps);
+    }
+  }
+
+  return {
+    next_target_weight: nextTargetWeight,
+    next_target_reps: nextTargetReps,
+  };
 }
 
 interface ExerciseHistoryEntry {
@@ -178,20 +277,6 @@ export default function ActiveWorkoutScreen() {
   const [swapSearch, setSwapSearch] = useState('');
   const [swapping, setSwapping] = useState(false);
 
-  const { exercises: catalogExercises, loading: catalogLoading, refetch: refreshCatalog } = useExercises();
-
-  const filteredSwapExercises = useMemo(() => {
-    const q = swapSearch.trim().toLowerCase();
-    if (!q) return catalogExercises;
-    return catalogExercises.filter((ex) => {
-      const nameMatch = ex.name.toLowerCase().includes(q);
-      const muscleMatch = ex.exercise_muscle_groups?.some((m) =>
-        m.muscle_group.toLowerCase().includes(q)
-      );
-      return nameMatch || muscleMatch;
-    });
-  }, [catalogExercises, swapSearch]);
-
   const draft = useActiveWorkoutStore((s) => s.draft);
   const hasHydrated = useActiveWorkoutStore((s) => s._hasHydrated);
   const initializeDraft = useActiveWorkoutStore((s) => s.initializeDraft);
@@ -201,8 +286,75 @@ export default function ActiveWorkoutScreen() {
   const clearActiveWorkout = useActiveWorkoutStore((s) => s.clearActiveWorkout);
 
   const defaultRestSeconds = usePreferencesStore((s) => s.defaultRestSeconds);
+  const lockRestTimerToDefault = usePreferencesStore((s) => s.lockRestTimerToDefault);
   const supersetTransitionSeconds = usePreferencesStore((s) => s.supersetTransitionSeconds);
   const hapticsEnabled = usePreferencesStore((s) => s.hapticsEnabled);
+  const filterByMyGym = usePreferencesStore((s) => s.filterByMyGym);
+  const allowedEquipment = usePreferencesStore((s) => s.allowedEquipment);
+  const maxDumbbellWeightLbs = usePreferencesStore((s) => s.maxDumbbellWeightLbs);
+
+  const [swapEquipmentFilter, setSwapEquipmentFilter] = useState<EquipmentFilterMode>(
+    filterByMyGym ? 'my_gym' : 'all'
+  );
+
+  useEffect(() => {
+    setSwapEquipmentFilter(filterByMyGym ? 'my_gym' : 'all');
+  }, [filterByMyGym]);
+
+  const myGymChipLabel =
+    allowedEquipment.length === 2 &&
+    allowedEquipment.includes('dumbbell') &&
+    allowedEquipment.includes('bodyweight')
+      ? 'My Gym (DB + BW)'
+      : 'My Gym';
+
+  const getEffectiveRestSeconds = (exRest?: number): number =>
+    lockRestTimerToDefault
+      ? defaultRestSeconds || 60
+      : exRest || defaultRestSeconds || 60;
+
+  const { exercises: catalogExercises, loading: catalogLoading, refetch: refreshCatalog } = useExercises();
+
+  const filteredSwapExercises = useMemo(() => {
+    const q = swapSearch.trim().toLowerCase();
+    return catalogExercises.filter((ex) => {
+      if (!matchesEquipmentFilter(ex, swapEquipmentFilter, allowedEquipment)) {
+        return false;
+      }
+      if (!q) return true;
+      const eqLabel = EQUIPMENT_LABELS[resolveExerciseEquipment(ex)].toLowerCase();
+      const nameMatch = ex.name.toLowerCase().includes(q) || eqLabel.includes(q);
+      const muscleMatch = ex.exercise_muscle_groups?.some((m) => {
+        const raw = m.muscle_group.toLowerCase();
+        const norm = String(normalizeMuscleGroup(m.muscle_group)).toLowerCase();
+        return raw.includes(q) || norm.includes(q);
+      });
+      return nameMatch || muscleMatch;
+    });
+  }, [catalogExercises, swapSearch, swapEquipmentFilter, allowedEquipment]);
+
+  useEffect(() => {
+    if (!draft || draft.syncStatus !== 'in_progress' || catalogExercises.length === 0) return;
+    const needsBackfill = draft.workoutExercises.some(
+      (ex) => !ex.equipment || ex.is_unilateral === undefined
+    );
+    if (!needsBackfill) return;
+    const byId = new Map(catalogExercises.map((c) => [c.id, c]));
+    updateWorkoutExercises((prev) =>
+      prev.map((ex) => {
+        if (ex.equipment && ex.is_unilateral !== undefined) return ex;
+        const match = byId.get(ex.exercise_id);
+        return {
+          ...ex,
+          equipment: ex.equipment || resolveExerciseEquipment(match || ex),
+          is_unilateral:
+            ex.is_unilateral !== undefined
+              ? ex.is_unilateral
+              : Boolean(match?.is_unilateral),
+        };
+      })
+    );
+  }, [draft, catalogExercises, updateWorkoutExercises]);
 
   const workoutExercises = draft?.workoutExercises ?? [];
   const restTimerEndTimestamp = draft?.restTimerEndTimestamp ?? null;
@@ -372,12 +524,18 @@ export default function ActiveWorkoutScreen() {
       .filter(Boolean);
 
     const exerciseHistoryMap = await fetchExerciseHistoryMap(userId, exerciseIds);
-    const fallbackRest = usePreferencesStore.getState().defaultRestSeconds || 90;
+    const prefsSnapshot = usePreferencesStore.getState();
+    const fallbackRest = prefsSnapshot.defaultRestSeconds || 60;
+    const maxDbCap = prefsSnapshot.maxDumbbellWeightLbs;
 
     const items: ActiveWorkoutExercise[] = rawExercises.map((re: any) => {
       const exObj = re.exercises || {};
       const exId = exObj.id || re.exercise_id;
-      const isBw = exObj.is_bodyweight_only || false;
+      const isBw = Boolean(exObj.is_bodyweight_only);
+      const isUni = Boolean(exObj.is_unilateral);
+      const eq = resolveExerciseEquipment(exObj);
+      const clampDb = (w: number) =>
+        eq === 'dumbbell' && maxDbCap && maxDbCap > 0 ? Math.min(w, maxDbCap) : w;
       const plannedSetsCount = re.planned_sets || 3;
       const history = exerciseHistoryMap[exId];
       const prescribedMaxReps = re.target_rep_max ?? re.target_reps ?? null;
@@ -418,9 +576,11 @@ export default function ActiveWorkoutScreen() {
               : history.lastCompletedWeight ?? history.maxCompletedWeight ?? firstSet?.weight;
 
           if (resolvedWeight !== null && resolvedWeight !== undefined) {
-            baseWeight = resolvedWeight.toString();
+            baseWeight = clampDb(Number(resolvedWeight)).toString();
+          } else if (re.target_weight) {
+            baseWeight = clampDb(Number(re.target_weight)).toString();
           } else {
-            baseWeight = re.target_weight ? re.target_weight.toString() : '135';
+            baseWeight = String(getDefaultStartingWeight(exObj, maxDbCap));
           }
 
           baseReps =
@@ -445,7 +605,9 @@ export default function ActiveWorkoutScreen() {
           baseReps = prescribedMaxReps ? prescribedMaxReps.toString() : '10';
           exPrevPerfSummary = '—';
         } else {
-          baseWeight = re.target_weight ? re.target_weight.toString() : '135';
+          baseWeight = re.target_weight
+            ? clampDb(Number(re.target_weight)).toString()
+            : String(getDefaultStartingWeight(exObj, maxDbCap));
           baseReps = prescribedMaxReps ? prescribedMaxReps.toString() : '10';
           exPrevPerfSummary = re.target_weight
             ? `${re.target_weight} lbs × ${prescribedMaxReps || 10}`
@@ -498,6 +660,8 @@ export default function ActiveWorkoutScreen() {
         name: exObj.name || 'Exercise',
         default_rest_timer_seconds: exObj.default_rest_timer_seconds || fallbackRest,
         is_bodyweight_only: isBw,
+        is_unilateral: isUni,
+        equipment: eq,
         prev_performance: exPrevPerfSummary,
         next_target_weight: baseWeight,
         is_target_weight_manually_edited: false,
@@ -544,7 +708,6 @@ export default function ActiveWorkoutScreen() {
     let durationToSet: number | null = null;
     let timerLabelToSet: string = 'Rest Timer';
     let cancelTimer = false;
-    const fallbackRest = defaultRestSeconds || 90;
 
     if (willBeCompleted) {
       if (targetEx.superset_id && hapticsEnabled) {
@@ -562,9 +725,13 @@ export default function ActiveWorkoutScreen() {
           );
 
         if (isRoundComplete) {
-          durationToSet = Math.max(
-            ...supersetGroup.map((e) => e.default_rest_timer_seconds || fallbackRest)
-          );
+          durationToSet = lockRestTimerToDefault
+            ? defaultRestSeconds || 60
+            : Math.max(
+                ...supersetGroup.map((e) =>
+                  getEffectiveRestSeconds(e.default_rest_timer_seconds)
+                )
+              );
           timerLabelToSet = 'Rest Timer';
         } else if (supersetTransitionSeconds > 0) {
           durationToSet = supersetTransitionSeconds;
@@ -573,7 +740,7 @@ export default function ActiveWorkoutScreen() {
           cancelTimer = true;
         }
       } else {
-        durationToSet = targetEx.default_rest_timer_seconds || fallbackRest;
+        durationToSet = getEffectiveRestSeconds(targetEx.default_rest_timer_seconds);
         timerLabelToSet = 'Rest Timer';
       }
     }
@@ -586,33 +753,12 @@ export default function ActiveWorkoutScreen() {
           si === setIdx ? { ...s, is_completed: willBeCompleted } : s
         );
 
-        let nextTargetWeight = ex.next_target_weight;
-        if (!ex.is_bodyweight_only && !ex.is_target_weight_manually_edited) {
-          const completedWeights = nextSets
-            .filter((s) => isWorkingCompletedSet(s))
-            .map((s) => parseFloat(s.weight))
-            .filter((w) => !isNaN(w) && w > 0);
-          if (completedWeights.length > 0) {
-            nextTargetWeight = Math.max(...completedWeights).toString();
-          }
-        }
-
-        let nextTargetReps = ex.next_target_reps || '';
-        if (ex.is_bodyweight_only && !ex.is_target_reps_manually_edited) {
-          const completedReps = nextSets
-            .filter((s) => isWorkingCompletedSet(s))
-            .map((s) => parseInt(s.reps, 10))
-            .filter((r) => !isNaN(r) && r > 0);
-          if (completedReps.length > 0) {
-            nextTargetReps = Math.max(...completedReps).toString();
-          }
-        }
+        const nextTargets = recomputeAutoTargets(ex, nextSets, maxDumbbellWeightLbs);
 
         return {
           ...ex,
           sets: nextSets,
-          next_target_weight: nextTargetWeight,
-          next_target_reps: nextTargetReps,
+          ...nextTargets,
         };
       });
     });
@@ -651,23 +797,22 @@ export default function ActiveWorkoutScreen() {
           return s;
         });
 
-        let nextTarget = ex.next_target_weight;
-        if (!ex.is_bodyweight_only && !ex.is_target_weight_manually_edited && !isEditingWarmup) {
-          const completedWeights = nextSets
-            .filter((s) => isWorkingCompletedSet(s))
-            .map((s) => parseFloat(s.weight))
-            .filter((w) => !isNaN(w) && w > 0);
-          if (completedWeights.length > 0) {
-            nextTarget = Math.max(...completedWeights).toString();
-          } else if (shouldCloneDown) {
-            nextTarget = val;
-          }
-        }
+        const nextTargets = isEditingWarmup
+          ? {
+              next_target_weight: ex.next_target_weight,
+              next_target_reps: ex.next_target_reps || '',
+            }
+          : recomputeAutoTargets(
+              ex,
+              nextSets,
+              maxDumbbellWeightLbs,
+              shouldCloneDown ? { clonedWeight: val } : undefined
+            );
 
         return {
           ...ex,
           sets: nextSets,
-          next_target_weight: nextTarget,
+          ...nextTargets,
         };
       });
     });
@@ -699,23 +844,22 @@ export default function ActiveWorkoutScreen() {
           return s;
         });
 
-        let nextTargetReps = ex.next_target_reps || '';
-        if (ex.is_bodyweight_only && !ex.is_target_reps_manually_edited && !isEditingWarmup) {
-          const completedReps = nextSets
-            .filter((s) => isWorkingCompletedSet(s))
-            .map((s) => parseInt(s.reps, 10))
-            .filter((r) => !isNaN(r) && r > 0);
-          if (completedReps.length > 0) {
-            nextTargetReps = Math.max(...completedReps).toString();
-          } else if (shouldCloneDown) {
-            nextTargetReps = val;
-          }
-        }
+        const nextTargets = isEditingWarmup
+          ? {
+              next_target_weight: ex.next_target_weight,
+              next_target_reps: ex.next_target_reps || '',
+            }
+          : recomputeAutoTargets(
+              ex,
+              nextSets,
+              maxDumbbellWeightLbs,
+              shouldCloneDown ? { clonedReps: val } : undefined
+            );
 
         return {
           ...ex,
           sets: nextSets,
-          next_target_reps: nextTargetReps,
+          ...nextTargets,
         };
       });
     });
@@ -730,33 +874,12 @@ export default function ActiveWorkoutScreen() {
           si === setIdx ? { ...s, set_type: cycleSetTypeValue(s.set_type) } : s
         );
 
-        let nextTargetWeight = ex.next_target_weight;
-        if (!ex.is_bodyweight_only && !ex.is_target_weight_manually_edited) {
-          const completedWeights = nextSets
-            .filter((s) => isWorkingCompletedSet(s))
-            .map((s) => parseFloat(s.weight))
-            .filter((w) => !isNaN(w) && w > 0);
-          if (completedWeights.length > 0) {
-            nextTargetWeight = Math.max(...completedWeights).toString();
-          }
-        }
-
-        let nextTargetReps = ex.next_target_reps || '';
-        if (ex.is_bodyweight_only && !ex.is_target_reps_manually_edited) {
-          const completedReps = nextSets
-            .filter((s) => isWorkingCompletedSet(s))
-            .map((s) => parseInt(s.reps, 10))
-            .filter((r) => !isNaN(r) && r > 0);
-          if (completedReps.length > 0) {
-            nextTargetReps = Math.max(...completedReps).toString();
-          }
-        }
+        const nextTargets = recomputeAutoTargets(ex, nextSets, maxDumbbellWeightLbs);
 
         return {
           ...ex,
           sets: nextSets,
-          next_target_weight: nextTargetWeight,
-          next_target_reps: nextTargetReps,
+          ...nextTargets,
         };
       });
     });
@@ -820,7 +943,11 @@ export default function ActiveWorkoutScreen() {
             ...currentSets,
             {
               set_number: newSetNumber,
-              weight: lastWorkingSet ? lastWorkingSet.weight : ex.is_bodyweight_only ? '0' : '135',
+              weight: lastWorkingSet
+                ? lastWorkingSet.weight
+                : ex.is_bodyweight_only
+                ? '0'
+                : String(getDefaultStartingWeight(ex, maxDumbbellWeightLbs)),
               reps: lastWorkingSet ? lastWorkingSet.reps : '10',
               prev_performance: ex.prev_performance || '—',
               is_completed: false,
@@ -865,7 +992,11 @@ export default function ActiveWorkoutScreen() {
             ...currentSets,
             {
               set_number: newSetNumber,
-              weight: lastWorkingSet ? lastWorkingSet.weight : ex.is_bodyweight_only ? '0' : '135',
+              weight: lastWorkingSet
+                ? lastWorkingSet.weight
+                : ex.is_bodyweight_only
+                ? '0'
+                : String(getDefaultStartingWeight(ex, maxDumbbellWeightLbs)),
               reps: lastWorkingSet ? lastWorkingSet.reps : '10',
               prev_performance: ex.prev_performance || '—',
               is_completed: false,
@@ -916,8 +1047,14 @@ export default function ActiveWorkoutScreen() {
       const userId = draft?.userId || '';
       const historyMap = await fetchExerciseHistoryMap(userId, [newEx.id]);
       const history = historyMap[newEx.id];
-      const fallbackRest = defaultRestSeconds || 90;
+      const fallbackRest = defaultRestSeconds || 60;
       const isBw = Boolean(newEx.is_bodyweight_only);
+      const isUni = Boolean(newEx.is_unilateral);
+      const eq = resolveExerciseEquipment(newEx);
+      const clampDb = (w: number) =>
+        eq === 'dumbbell' && maxDumbbellWeightLbs && maxDumbbellWeightLbs > 0
+          ? Math.min(w, maxDumbbellWeightLbs)
+          : w;
 
       updateWorkoutExercises((prev) => {
         return prev.map((oldEx, idx) => {
@@ -927,7 +1064,9 @@ export default function ActiveWorkoutScreen() {
           const lastSet = history?.completedSets?.[history.completedSets.length - 1];
           const prescribedReps = oldEx.target_rep_max ?? oldEx.target_rep_min ?? 10;
 
-          let baseWeight = isBw ? '0' : '135';
+          let baseWeight = isBw
+            ? '0'
+            : String(getDefaultStartingWeight(newEx, maxDumbbellWeightLbs));
           let baseReps = String(prescribedReps);
           let summary = '—';
 
@@ -950,7 +1089,10 @@ export default function ActiveWorkoutScreen() {
                 history.nextTargetWeight !== null
                   ? history.nextTargetWeight
                   : history.lastCompletedWeight ?? history.maxCompletedWeight ?? firstSet?.weight;
-              baseWeight = resolvedW !== null && resolvedW !== undefined ? String(resolvedW) : '135';
+              baseWeight =
+                resolvedW !== null && resolvedW !== undefined
+                  ? String(clampDb(Number(resolvedW)))
+                  : String(getDefaultStartingWeight(newEx, maxDumbbellWeightLbs));
               baseReps =
                 history.nextTargetReps !== null
                   ? String(history.nextTargetReps)
@@ -994,6 +1136,8 @@ export default function ActiveWorkoutScreen() {
             name: newEx.name,
             default_rest_timer_seconds: newEx.default_rest_timer_seconds || fallbackRest,
             is_bodyweight_only: isBw,
+            is_unilateral: isUni,
+            equipment: eq,
             prev_performance: summary,
             next_target_weight: baseWeight,
             is_target_weight_manually_edited: false,
@@ -1086,7 +1230,11 @@ export default function ActiveWorkoutScreen() {
       }
       if (isWorkingCompletedSet(st)) {
         liveCompletedSets++;
-        liveTonnage += (parseFloat(st.weight) || 0) * (parseInt(st.reps, 10) || 0);
+        liveTonnage += getSetTonnage(
+          parseFloat(st.weight) || 0,
+          parseInt(st.reps, 10) || 0,
+          ex.is_unilateral
+        );
       }
     });
   });
@@ -1183,6 +1331,9 @@ export default function ActiveWorkoutScreen() {
               });
 
               const repRangeLabel = formatRepRange(ex.target_rep_min, ex.target_rep_max);
+              const effectiveRest = getEffectiveRestSeconds(ex.default_rest_timer_seconds);
+              const eqLabel = EQUIPMENT_LABELS[resolveExerciseEquipment(ex)];
+              const atDbCap = isExerciseAtDbCap(ex, maxDumbbellWeightLbs);
               const canRemoveSet =
                 ex.sets.length > 1 && !ex.sets[ex.sets.length - 1].is_completed;
 
@@ -1196,6 +1347,13 @@ export default function ActiveWorkoutScreen() {
                       <View className="flex-1">
                         <View className="flex-row items-center flex-wrap gap-1.5">
                           <Text className="text-white font-bold text-lg">{ex.name}</Text>
+                          {ex.is_unilateral && (
+                            <View className="bg-cyan-500/20 px-1.5 py-0.5 rounded border border-cyan-500/40">
+                              <Text className="text-cyan-300 text-[9px] font-extrabold uppercase tracking-wider">
+                                PER SIDE
+                              </Text>
+                            </View>
+                          )}
                           {ex.is_swapped && (
                             <View className="bg-cyan-500/20 px-1.5 py-0.5 rounded border border-cyan-500/40">
                               <Text className="text-cyan-300 text-[9px] font-bold uppercase">Swapped</Text>
@@ -1203,7 +1361,7 @@ export default function ActiveWorkoutScreen() {
                           )}
                         </View>
                         <Text className="text-slate-400 text-xs">
-                          {ex.is_bodyweight_only ? 'Bodyweight' : 'Weighted'} • {ex.default_rest_timer_seconds}s Rest
+                          {eqLabel} • {effectiveRest}s Rest
                           {repRangeLabel ? ` • Target ${repRangeLabel}` : ''}
                         </Text>
                       </View>
@@ -1233,7 +1391,7 @@ export default function ActiveWorkoutScreen() {
                     <Text className="w-8 text-slate-500 text-xs font-bold text-center">SET</Text>
                     <Text className="w-16 text-slate-500 text-xs font-bold px-1">PREV</Text>
                     <Text className="flex-1 text-slate-500 text-xs font-bold text-center">
-                      {ex.is_bodyweight_only ? 'LOAD' : 'LBS'}
+                      {ex.is_bodyweight_only ? 'LOAD' : ex.is_unilateral ? 'LBS (EA)' : 'LBS'}
                     </Text>
                     <Text className="flex-1 text-slate-500 text-xs font-bold text-center">REPS</Text>
                     <Text className="w-11 text-slate-500 text-xs font-bold text-center">RIR</Text>
@@ -1248,6 +1406,7 @@ export default function ActiveWorkoutScreen() {
                       setType={setData.set_type || 'normal'}
                       rir={setData.rir ?? null}
                       isBodyweightOnly={ex.is_bodyweight_only}
+                      isUnilateral={Boolean(ex.is_unilateral)}
                       weight={setData.weight}
                       reps={setData.reps}
                       prevPerformance={setData.prev_performance || ex.prev_performance}
@@ -1281,11 +1440,15 @@ export default function ActiveWorkoutScreen() {
                   </View>
 
                   {/* Fresh Memory Overload Target Input */}
-                  <View className="mt-4 pt-3 border-t border-slate-800 flex-row items-center justify-between">
+                  <View className="mt-4 pt-3 border-t border-slate-800 flex-row items-center justify-between flex-wrap gap-2">
                     <View className="flex-row items-center">
                       <Sparkles color="#a78bfa" size={16} className="mr-2" />
                       <Text className="text-purple-300 text-xs font-semibold">
-                        {ex.is_bodyweight_only ? 'Next Target Reps' : 'Next Target Weight'}
+                        {ex.is_bodyweight_only
+                          ? 'Next Target Reps'
+                          : atDbCap
+                          ? `Next Target Reps (At ${maxDumbbellWeightLbs} lb Cap)`
+                          : 'Next Target Weight'}
                       </Text>
                     </View>
                     {ex.is_bodyweight_only ? (
@@ -1300,6 +1463,33 @@ export default function ActiveWorkoutScreen() {
                         />
                         <Text className="text-slate-400 text-xs font-medium ml-1">reps</Text>
                       </View>
+                    ) : atDbCap ? (
+                      <View className="flex-row items-center gap-2">
+                        <View className="flex-row items-center bg-slate-800/70 px-2.5 py-1.5 rounded-xl border border-emerald-500/30">
+                          <TextInput
+                            className="text-emerald-300 font-bold text-xs w-10 text-center"
+                            style={{ textAlignVertical: 'center', includeFontPadding: false }}
+                            keyboardType="numeric"
+                            value={ex.next_target_weight}
+                            onChangeText={(v) => handleChangeNextTarget(exIdx, v)}
+                            selectTextOnFocus
+                          />
+                          <Text className="text-emerald-400/80 text-[11px] font-medium">
+                            {ex.is_unilateral ? 'lbs ea' : 'lbs'}
+                          </Text>
+                        </View>
+                        <View className="flex-row items-center bg-slate-800 px-3 py-1.5 rounded-xl border border-purple-500/40">
+                          <TextInput
+                            className="text-white font-bold text-sm w-12 text-center"
+                            style={{ textAlignVertical: 'center', includeFontPadding: false }}
+                            keyboardType="numeric"
+                            value={ex.next_target_reps || ''}
+                            onChangeText={(v) => handleChangeNextTargetReps(exIdx, v)}
+                            selectTextOnFocus
+                          />
+                          <Text className="text-purple-300 text-xs font-medium ml-1">reps</Text>
+                        </View>
+                      </View>
                     ) : (
                       <View className="flex-row items-center bg-slate-800 px-3 py-1.5 rounded-xl border border-slate-700">
                         <TextInput
@@ -1310,7 +1500,9 @@ export default function ActiveWorkoutScreen() {
                           onChangeText={(v) => handleChangeNextTarget(exIdx, v)}
                           selectTextOnFocus
                         />
-                        <Text className="text-slate-400 text-xs font-medium ml-1">lbs</Text>
+                        <Text className="text-slate-400 text-xs font-medium ml-1">
+                          {ex.is_unilateral ? 'lbs ea' : 'lbs'}
+                        </Text>
                       </View>
                     )}
                   </View>
@@ -1326,9 +1518,14 @@ export default function ActiveWorkoutScreen() {
                 .sort((a, b) => (a.ex.superset_order || 1) - (b.ex.superset_order || 1));
 
               const maxRounds = Math.max(...groupItems.map((item) => item.ex.sets.length), 1);
-              const roundRestDuration = Math.max(
-                ...groupItems.map((item) => item.ex.default_rest_timer_seconds || 90)
-              );
+              const roundRestDuration = lockRestTimerToDefault
+                ? defaultRestSeconds || 60
+                : Math.max(
+                    ...groupItems.map((item) =>
+                      getEffectiveRestSeconds(item.ex.default_rest_timer_seconds)
+                    )
+                  );
+              const anyGroupUnilateral = groupItems.some((item) => item.ex.is_unilateral);
               const canRemoveTrailingRound =
                 maxRounds > 1 &&
                 !groupItems.some((item) => Boolean(item.ex.sets[maxRounds - 1]?.is_completed));
@@ -1369,9 +1566,14 @@ export default function ActiveWorkoutScreen() {
                               <View className="bg-indigo-500/30 px-1.5 py-0.5 rounded mr-1.5">
                                 <Text className="text-indigo-200 font-mono font-bold text-[10px]">{tag}</Text>
                               </View>
-                              <Text className="text-slate-200 text-xs font-semibold flex-1" numberOfLines={1}>
+                              <Text className="text-slate-200 text-xs font-semibold flex-shrink" numberOfLines={1}>
                                 {g.ex.name}
                               </Text>
+                              {g.ex.is_unilateral && (
+                                <View className="bg-cyan-500/20 px-1 py-0.5 rounded ml-1.5 border border-cyan-500/40">
+                                  <Text className="text-cyan-300 text-[8px] font-extrabold">PER SIDE</Text>
+                                </View>
+                              )}
                               {slotRange && (
                                 <Text className="text-indigo-300/80 text-[10px] font-medium ml-1.5">
                                   {slotRange}
@@ -1448,7 +1650,7 @@ export default function ActiveWorkoutScreen() {
                             Exercise / Prev
                           </Text>
                           <Text className="w-16 text-slate-500 text-[11px] font-bold text-center uppercase tracking-wider">
-                            Load
+                            {anyGroupUnilateral ? 'Load (ea)' : 'Load'}
                           </Text>
                           <Text className="w-14 text-slate-500 text-[11px] font-bold text-center uppercase tracking-wider">
                             Reps
@@ -1511,9 +1713,14 @@ export default function ActiveWorkoutScreen() {
                                         {tagDisplayLabel}
                                       </Text>
                                     </TouchableOpacity>
-                                    <Text className="text-white font-bold text-xs flex-1" numberOfLines={1}>
+                                    <Text className="text-white font-bold text-xs flex-shrink" numberOfLines={1}>
                                       {groupEx.name}
                                     </Text>
+                                    {groupEx.is_unilateral && (
+                                      <View className="bg-cyan-500/20 px-1 py-0.5 rounded ml-1 border border-cyan-500/40">
+                                        <Text className="text-cyan-300 text-[8px] font-extrabold">EA</Text>
+                                      </View>
+                                    )}
                                   </View>
                                   <Text className="text-slate-400 text-[11px] pl-0.5" numberOfLines={1}>
                                     {prevSummary}
@@ -1535,7 +1742,7 @@ export default function ActiveWorkoutScreen() {
                                       }`}
                                       style={{ textAlignVertical: 'center', includeFontPadding: false }}
                                       keyboardType="numeric"
-                                      placeholder="lbs"
+                                      placeholder={groupEx.is_unilateral ? 'lbs ea' : 'lbs'}
                                       placeholderTextColor="#475569"
                                       value={setData.weight}
                                       onChangeText={(v) => handleChangeWeight(originalExIdx, roundIdx, v)}
@@ -1672,18 +1879,26 @@ export default function ActiveWorkoutScreen() {
                         const groupEx = item.ex;
                         const originalExIdx = item.originalIndex;
                         const tag = `${letter}${groupEx.superset_order || subIdx + 1}`;
+                        const atCap = isExerciseAtDbCap(groupEx, maxDumbbellWeightLbs);
                         return (
                           <View
                             key={`target_${originalExIdx}`}
                             className="flex-row items-center justify-between bg-slate-800/60 px-3 py-2 rounded-xl border border-slate-700/50 mb-1.5"
                           >
-                            <View className="flex-row items-center flex-1 mr-2">
-                              <View className="bg-indigo-500/30 px-1.5 py-0.5 rounded mr-1.5">
-                                <Text className="text-indigo-300 font-mono font-bold text-[10px]">{tag}</Text>
+                            <View className="flex-1 mr-2">
+                              <View className="flex-row items-center">
+                                <View className="bg-indigo-500/30 px-1.5 py-0.5 rounded mr-1.5">
+                                  <Text className="text-indigo-300 font-mono font-bold text-[10px]">{tag}</Text>
+                                </View>
+                                <Text className="text-slate-200 text-xs font-semibold flex-shrink" numberOfLines={1}>
+                                  {groupEx.name}
+                                </Text>
                               </View>
-                              <Text className="text-slate-200 text-xs font-semibold flex-1" numberOfLines={1}>
-                                {groupEx.name}
-                              </Text>
+                              {atCap && (
+                                <Text className="text-emerald-300 text-[10px] font-bold mt-0.5">
+                                  {maxDumbbellWeightLbs}lb Cap • Next Reps
+                                </Text>
+                              )}
                             </View>
                             {groupEx.is_bodyweight_only ? (
                               <View className="flex-row items-center bg-slate-900 px-2.5 py-1 rounded-lg border border-slate-700">
@@ -1697,6 +1912,33 @@ export default function ActiveWorkoutScreen() {
                                 />
                                 <Text className="text-slate-400 text-[10px] font-medium ml-1">reps</Text>
                               </View>
+                            ) : atCap ? (
+                              <View className="flex-row items-center gap-1.5">
+                                <View className="flex-row items-center bg-slate-900/70 px-2 py-1 rounded-lg border border-emerald-500/30">
+                                  <TextInput
+                                    className="text-emerald-300 font-bold text-xs w-9 text-center"
+                                    style={{ textAlignVertical: 'center', includeFontPadding: false }}
+                                    keyboardType="numeric"
+                                    value={groupEx.next_target_weight}
+                                    onChangeText={(v) => handleChangeNextTarget(originalExIdx, v)}
+                                    selectTextOnFocus
+                                  />
+                                  <Text className="text-emerald-400/80 text-[10px] font-medium">
+                                    {groupEx.is_unilateral ? 'lb ea' : 'lb'}
+                                  </Text>
+                                </View>
+                                <View className="flex-row items-center bg-slate-900 px-2.5 py-1 rounded-lg border border-purple-500/40">
+                                  <TextInput
+                                    className="text-white font-bold text-xs w-10 text-center"
+                                    style={{ textAlignVertical: 'center', includeFontPadding: false }}
+                                    keyboardType="numeric"
+                                    value={groupEx.next_target_reps || ''}
+                                    onChangeText={(v) => handleChangeNextTargetReps(originalExIdx, v)}
+                                    selectTextOnFocus
+                                  />
+                                  <Text className="text-purple-300 text-[10px] font-medium ml-1">reps</Text>
+                                </View>
+                              </View>
                             ) : (
                               <View className="flex-row items-center bg-slate-900 px-2.5 py-1 rounded-lg border border-slate-700">
                                 <TextInput
@@ -1707,7 +1949,9 @@ export default function ActiveWorkoutScreen() {
                                   onChangeText={(v) => handleChangeNextTarget(originalExIdx, v)}
                                   selectTextOnFocus
                                 />
-                                <Text className="text-slate-400 text-[10px] font-medium ml-1">lbs</Text>
+                                <Text className="text-slate-400 text-[10px] font-medium ml-1">
+                                  {groupEx.is_unilateral ? 'lbs ea' : 'lbs'}
+                                </Text>
                               </View>
                             )}
                           </View>
@@ -1833,12 +2077,43 @@ export default function ActiveWorkoutScreen() {
               <Search color="#94a3b8" size={16} className="mr-2" />
               <TextInput
                 className="flex-1 text-white text-sm font-medium"
-                placeholder="Search by exercise or muscle group..."
+                placeholder="Search by exercise, equipment, or muscle..."
                 placeholderTextColor="#64748b"
                 value={swapSearch}
                 onChangeText={setSwapSearch}
                 autoCapitalize="none"
               />
+            </View>
+
+            {/* Equipment Filter Chips */}
+            <View className="mb-3">
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8 }}>
+                {(
+                  [
+                    { key: 'my_gym', label: myGymChipLabel },
+                    { key: 'dumbbell', label: 'Dumbbell' },
+                    { key: 'bodyweight', label: 'Bodyweight' },
+                    { key: 'all', label: 'All' },
+                  ] as const
+                ).map((chip) => {
+                  const active = swapEquipmentFilter === chip.key;
+                  return (
+                    <TouchableOpacity
+                      key={chip.key}
+                      onPress={() => setSwapEquipmentFilter(chip.key)}
+                      className={`px-3 py-1.5 rounded-full border ${
+                        active
+                          ? 'bg-emerald-600/25 border-emerald-500'
+                          : 'bg-slate-800 border-slate-700'
+                      }`}
+                    >
+                      <Text className={`text-xs font-bold ${active ? 'text-emerald-300' : 'text-slate-300'}`}>
+                        {chip.label}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </ScrollView>
             </View>
 
             {catalogLoading || swapping ? (
@@ -1852,8 +2127,9 @@ export default function ActiveWorkoutScreen() {
               <ScrollView className="max-h-96" showsVerticalScrollIndicator={false}>
                 {filteredSwapExercises.map((catEx) => {
                   const muscles = (catEx.exercise_muscle_groups || [])
-                    .map((m) => m.muscle_group)
+                    .map((m) => String(normalizeMuscleGroup(m.muscle_group)))
                     .join(', ');
+                  const eqLabel = EQUIPMENT_LABELS[resolveExerciseEquipment(catEx)];
                   return (
                     <TouchableOpacity
                       key={catEx.id}
@@ -1862,9 +2138,16 @@ export default function ActiveWorkoutScreen() {
                       className="bg-slate-800/80 border border-slate-700/70 rounded-2xl px-4 py-3 mb-2 flex-row items-center justify-between"
                     >
                       <View className="flex-1 mr-3">
-                        <Text className="text-white font-bold text-sm">{catEx.name}</Text>
+                        <View className="flex-row items-center flex-wrap gap-1.5">
+                          <Text className="text-white font-bold text-sm">{catEx.name}</Text>
+                          {catEx.is_unilateral ? (
+                            <View className="bg-cyan-500/20 px-1.5 py-0.5 rounded border border-cyan-500/40">
+                              <Text className="text-cyan-300 text-[9px] font-extrabold">PER SIDE</Text>
+                            </View>
+                          ) : null}
+                        </View>
                         <Text className="text-slate-400 text-xs mt-0.5">
-                          {catEx.is_bodyweight_only ? 'Bodyweight' : 'Weighted'}
+                          {eqLabel}
                           {muscles ? ` • ${muscles}` : ''}
                         </Text>
                       </View>

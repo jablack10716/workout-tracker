@@ -2,7 +2,12 @@
  * Dashboard Metrics & Analytics Calculation Engine
  */
 
-import { isWorkingCompletedSet } from './analyticsEngine';
+import {
+  MUSCLE_GROUPS,
+  getSetTonnage,
+  isWorkingCompletedSet,
+  normalizeMuscleGroup,
+} from './analyticsEngine';
 
 export interface MuscleGroupVolume {
   name: string;
@@ -32,12 +37,11 @@ export interface DashboardStats {
     targetWeight: number | null;
     targetReps: number | null;
     isBodyweight: boolean;
+    isUnilateral: boolean;
   }>;
   currentDayName: string;
   currentDayNumber: number;
 }
-
-const MUSCLE_GROUPS = ['Chest', 'Back', 'Shoulders', 'Legs', 'Biceps', 'Triceps', 'Core'] as const;
 
 /**
  * Returns the start of the current week (Monday at 00:00:00.000 local time).
@@ -61,8 +65,9 @@ export function computeDashboardStats(
   const startOfWeek = getStartOfWeek();
   const todayDateStr = new Date().toDateString();
 
-  // 1. Determine all-time PRs per exercise across all sessions
-  const maxWeightPerExercise: Record<string, number> = {};
+  // 1. Determine all-time PRs per exercise across all sessions (weight, cap rep-PRs, and bodyweight rep-PRs)
+  const bestWeightPerExercise: Record<string, { weight: number; repsAtWeight: number }> = {};
+  const maxBodyweightRepsPerExercise: Record<string, number> = {};
   const prSessionIds = new Set<string>();
 
   const sortedSessions = [...allSessions].sort(
@@ -75,21 +80,59 @@ export function computeDashboardStats(
       const exId = se.exercises?.id || se.exercise_id;
       if (!exId) return;
 
-      const prevMax = maxWeightPerExercise[exId] || 0;
-      let sessionMax = 0;
+      const isBw = Boolean(se.exercises?.is_bodyweight_only);
+      let sessionMaxWeight = 0;
+      let sessionMaxRepsAtMaxWeight = 0;
+      let sessionMaxReps = 0;
 
       (se.session_sets || []).forEach((st: any) => {
-        if (isWorkingCompletedSet(st) && st.weight && st.weight > 0) {
-          if (st.weight > sessionMax) {
-            sessionMax = st.weight;
+        if (!isWorkingCompletedSet(st)) return;
+        const w = Number(st.weight) || 0;
+        const r = Number(st.reps) || 0;
+        if (r > sessionMaxReps) {
+          sessionMaxReps = r;
+        }
+        if (w > 0) {
+          if (w > sessionMaxWeight) {
+            sessionMaxWeight = w;
+            sessionMaxRepsAtMaxWeight = r;
+          } else if (w === sessionMaxWeight && r > sessionMaxRepsAtMaxWeight) {
+            sessionMaxRepsAtMaxWeight = r;
           }
         }
       });
 
-      if (sessionMax > 0 && sessionMax > prevMax) {
-        maxWeightPerExercise[exId] = sessionMax;
-        if (prevMax > 0) {
+      if (sessionMaxWeight > 0) {
+        const prev = bestWeightPerExercise[exId];
+        if (!prev) {
+          bestWeightPerExercise[exId] = {
+            weight: sessionMaxWeight,
+            repsAtWeight: sessionMaxRepsAtMaxWeight,
+          };
+        } else if (sessionMaxWeight > prev.weight) {
+          bestWeightPerExercise[exId] = {
+            weight: sessionMaxWeight,
+            repsAtWeight: sessionMaxRepsAtMaxWeight,
+          };
           sessionHadPR = true;
+        } else if (
+          sessionMaxWeight === prev.weight &&
+          prev.weight > 0 &&
+          sessionMaxRepsAtMaxWeight > prev.repsAtWeight
+        ) {
+          bestWeightPerExercise[exId] = {
+            weight: sessionMaxWeight,
+            repsAtWeight: sessionMaxRepsAtMaxWeight,
+          };
+          sessionHadPR = true;
+        }
+      } else if (isBw && sessionMaxReps > 0) {
+        const prevBwReps = maxBodyweightRepsPerExercise[exId] || 0;
+        if (sessionMaxReps > prevBwReps) {
+          maxBodyweightRepsPerExercise[exId] = sessionMaxReps;
+          if (prevBwReps > 0) {
+            sessionHadPR = true;
+          }
         }
       }
     });
@@ -115,6 +158,7 @@ export function computeDashboardStats(
 
   thisWeekSessions.forEach((s) => {
     (s.session_exercises || []).forEach((se: any) => {
+      const isUni = Boolean(se.exercises?.is_unilateral);
       const muscleMappings: Array<{ muscle_group: string; fraction: number }> =
         se.exercises?.exercise_muscle_groups || [];
 
@@ -123,12 +167,12 @@ export function computeDashboardStats(
           weeklyCompletedSets += 1;
           const w = Number(st.weight) || 0;
           const r = Number(st.reps) || 0;
-          weeklyTonnage += w * r;
+          weeklyTonnage += getSetTonnage(w, r, isUni);
 
           // Attribute completed set to muscle groups using fractions
           if (muscleMappings.length > 0) {
             muscleMappings.forEach((m) => {
-              const grp = m.muscle_group;
+              const grp = normalizeMuscleGroup(m.muscle_group);
               const frac = Number(m.fraction) || 1.0;
               if (completedMuscleSets[grp] !== undefined) {
                 completedMuscleSets[grp] += frac;
@@ -173,7 +217,7 @@ export function computeDashboardStats(
 
         if (muscleMappings.length > 0) {
           muscleMappings.forEach((m) => {
-            const grp = m.muscle_group;
+            const grp = normalizeMuscleGroup(m.muscle_group);
             const frac = Number(m.fraction) || 1.0;
             if (targetMuscleSets[grp] !== undefined) {
               targetMuscleSets[grp] += planned * frac;
@@ -196,6 +240,7 @@ export function computeDashboardStats(
                 ? Number(re.target_rep_min)
                 : null,
             isBodyweight: Boolean(re.exercises?.is_bodyweight_only),
+            isUnilateral: Boolean(re.exercises?.is_unilateral),
           });
         }
       });
@@ -233,10 +278,11 @@ export function computeDashboardStats(
     let todayTonnage = 0;
     let todaySets = 0;
     (todaySession.session_exercises || []).forEach((se: any) => {
+      const isUni = Boolean(se.exercises?.is_unilateral);
       (se.session_sets || []).forEach((st: any) => {
         if (isWorkingCompletedSet(st)) {
           todaySets += 1;
-          todayTonnage += (Number(st.weight) || 0) * (Number(st.reps) || 0);
+          todayTonnage += getSetTonnage(Number(st.weight) || 0, Number(st.reps) || 0, isUni);
         }
       });
     });

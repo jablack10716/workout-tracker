@@ -1,6 +1,6 @@
 > **Reference Pack Metadata**
 > - **App Name:** Best Damn Weight Lifting Tracker Ever (`weightliftinglog` / UI Banner: *Best Damn Workout Tracker Ever*)
-> - **Git Commit SHA & Branch:** `9a6f80e` (`main`) + Phase 1 & Phase 2 Working Tree Updates — Base Commit `2026-09-30 18:54:32 -0500`
+> - **Git Commit SHA & Branch:** `193549d` (`main`) + Phase 3A Basement Express Working Tree Updates — Base Commit `2026-11-14 08:30:17 -0600`
 > - **Snapshot Date:** `2026-11-14`
 > - **File Scope:** Complete PostgreSQL & client-side storage inventory, table columns/types/constraints/indexes, RLS security model, Mermaid ER diagram, migration history, seed catalog, and import/export capabilities.
 
@@ -12,7 +12,7 @@
 | :--- | :--- | :--- |
 | **PostgreSQL Tables (`public`)** | **8** | `exercises`, `exercise_muscle_groups`, `routines`, `routine_days`, `routine_exercises`, `sessions`, `session_exercises`, `session_sets` (plus FK dependency on `auth.users`) |
 | **PostgreSQL Custom Enums** | **3** | `routine_status`, `muscle_group`, `session_status` |
-| **SQL Migrations** | **8** | Sequential additive DDL, RLS hardening, data-safety, & Phase 2 programming scripts in `supabase/migrations/` |
+| **SQL Migrations** | **9** | Sequential additive DDL, RLS hardening, data-safety, Phase 2 programming, & Phase 3A sub-muscle/unilateral/equipment scripts in `supabase/migrations/` |
 | **Client-Side Zustand Stores** | **2** | `useActiveWorkoutStore` (`src/store/useActiveWorkoutStore.ts`) & `usePreferencesStore` (`src/store/usePreferencesStore.ts`) |
 | **AsyncStorage Namespaces** | **3** | `@supabase/supabase-js` Auth JWT session, `'weightlifting-active-workout-v1'`, and `'weightlifting-preferences-v1'` |
 
@@ -20,12 +20,12 @@
 
 ## 2. Custom PostgreSQL Enum Types
 
-Defined in `20260713165135_initial_schema.sql` and extended in `20260820000000_add_core_muscle_group.sql`:
+Defined in `20260713165135_initial_schema.sql`, extended in `20260820000000_add_core_muscle_group.sql`, and expanded with sub-muscle literals in `20261115000000_phase3a_basement_gym_submuscles_and_unilateral.sql`:
 
 | Enum Name | Allowed Values | Notes |
 | :--- | :--- | :--- |
 | `routine_status` | `'draft'`, `'active'`, `'completed'` | `'completed'` is never written by current app code (cycles increment indefinitely). |
-| `muscle_group` | `'Chest'`, `'Back'`, `'Shoulders'`, `'Legs'`, `'Biceps'`, `'Triceps'`, `'Core'` | `'Core'` was appended in migration 6 via `ALTER TYPE ... ADD VALUE IF NOT EXISTS 'Core'`. |
+| `muscle_group` | `'Chest'`, `'Lats'`, `'Upper Back'`, `'Shoulders'`, `'Quads'`, `'Hamstrings'`, `'Glutes'`, `'Calves'`, `'Biceps'`, `'Triceps'`, `'Core'` *(plus legacy `'Back'`, `'Legs'` retained in Postgres enum for backward compat)* | Migration 9 appends `'Lats'`, `'Upper Back'`, `'Quads'`, `'Hamstrings'`, `'Glutes'`, `'Calves'` outside `BEGIN; ... COMMIT;`, remaps seeds `'...0001..0012'`, and migrates legacy `'Back' -> 'Upper Back'` & `'Legs' -> 'Quads'`. |
 | `session_status` | `'in_progress'`, `'completed'` | Column defaults to `'in_progress'`, but `app/workout/complete.tsx` inserts directly with `'completed'`. |
 
 ---
@@ -43,7 +43,9 @@ Master library containing both immutable system-seeded exercises (`user_id = '00
 | `user_id` | `UUID` | `NOT NULL` | — | `REFERENCES auth.users(id) ON DELETE CASCADE` |
 | `name` | `TEXT` | `NOT NULL` | — | Exercise display name |
 | `is_bodyweight_only` | `BOOLEAN` | `NOT NULL` | `FALSE` | Flags bodyweight exercises |
-| `default_rest_timer_seconds` | `INTEGER` | `NOT NULL` | `90` | Rest countdown duration triggered on set completion |
+| `is_unilateral` | `BOOLEAN` | `NOT NULL` | `FALSE` | Added in migration 9; flags per-side single-arm/single-leg movements (`2x` tonnage, `1x` e1RM) |
+| `equipment` | `TEXT` | `NOT NULL` | `'dumbbell'` | Added in migration 9; `CHECK (equipment IN ('dumbbell', 'bodyweight', 'barbell', 'cable', 'machine', 'kettlebell', 'band', 'pullup_dip_bar'))` |
+| `default_rest_timer_seconds` | `INTEGER` | `NOT NULL` | `90` | Rest countdown duration triggered on set completion (`60s` on Phase 3A Basement Express seeds) |
 | `created_at` | `TIMESTAMPTZ` | `NULL` | `NOW()` | Creation timestamp |
 | `updated_at` | `TIMESTAMPTZ` | `NULL` | `NOW()` | Updated manually in app writes (no DB trigger) |
 
@@ -201,6 +203,8 @@ erDiagram
         uuid user_id FK
         text name
         boolean is_bodyweight_only
+        boolean is_unilateral
+        text equipment "dumbbell|bodyweight|..."
         int default_rest_timer_seconds
         timestamptz created_at
         timestamptz updated_at
@@ -296,30 +300,18 @@ erDiagram
 6. `20260820000000_add_core_muscle_group.sql` — Appends `'Core'` to `public.muscle_group` enum.
 7. `20261113000000_data_safety_and_day_names.sql` — Converts `sessions.routine_id`, `sessions.routine_day_id`, and `session_exercises.routine_exercise_id` foreign keys from `ON DELETE CASCADE` to `ON DELETE SET NULL`; adds `idx_sessions_routine_day_id` & `idx_session_exercises_routine_exercise_id`; re-asserts `sessions`, `session_exercises`, and `session_sets` RLS strictly via `sessions.user_id = (select auth.uid())`; adds `routine_days.name TEXT`.
 8. `20261114000000_phase2_supersets_and_programming.sql` — Dynamically drops old `days_in_split` CHECK constraint and sets `CHECK (days_in_split BETWEEN 2 AND 7)`; adds `routine_exercises.target_rep_min` & `target_rep_max` (backfilled from `target_reps`) with `routine_exercises_rep_range_check`; adds `session_sets.set_type` (`normal | warmup | drop | failure`) and `session_sets.rir` (`SMALLINT BETWEEN 0 AND 5`); reloads PostgREST schema cache (`NOTIFY pgrst, 'reload schema'`). Client writes degrade gracefully when remote schemas lag behind migration 8.
+9. `20261115000000_phase3a_basement_gym_submuscles_and_unilateral.sql` — Appends `'Lats'`, `'Upper Back'`, `'Quads'`, `'Hamstrings'`, `'Glutes'`, `'Calves'` to `public.muscle_group` outside `BEGIN; ... COMMIT;`; adds `exercises.is_unilateral` (`BOOLEAN NOT NULL DEFAULT FALSE`) and `exercises.equipment` (`CHECK` including `'dumbbell'`, `'bodyweight'`, `'barbell'`, `'cable'`, `'machine'`, `'kettlebell'`, `'band'`, `'pullup_dip_bar'`); ensures seed user (`00000000-0000-0000-0000-000000000000`) in `auth.users`; backfills equipment & remaps sub-muscles on seeds `...0001..0012`; performs collision-safe custom-exercise migration (`'Back' -> 'Upper Back'`, `'Legs' -> 'Quads'`); upserts `18` Basement Express dumbbell/incline-bench/bodyweight exercises (`...0013..0030`) at `60s` rest with `WHERE EXISTS` FK guards on `exercise_muscle_groups`.
 
 ### Client-Side Persisted Store Schema (`AsyncStorage` via Zustand)
-- **`useActiveWorkoutStore` (`weightlifting-active-workout-v1`, `src/store/useActiveWorkoutStore.ts`):** Persists `draft: ActiveWorkoutDraft | null` (`userId`, `routineId`, `routineName`, `routineDayId`, `dayNumber`, `dayName`, `cycleNumber`, `daysInSplit`, `cyclesPerRoutine`, `startedAtTimestamp`, `durationSeconds`, `workoutExercises` including per-set `set_type` & `rir` and per-exercise `target_rep_min`, `target_rep_max`, `next_target_reps`, `is_swapped`, `restTimerEndTimestamp`, `restTimerTotalSeconds`, `restTimerLabel`, `syncStatus: 'in_progress' | 'pending_sync'`, `savedSessionId`) alongside an in-memory `_hasHydrated` boolean.
-- **`usePreferencesStore` (`weightlifting-preferences-v1`, `src/store/usePreferencesStore.ts`):** Persists `defaultRestSeconds: 60 | 90 | 120 | 180` (default `90`), `supersetTransitionSeconds: 0 | 15 | 30 | 45` (default `0`), and `hapticsEnabled: boolean` (default `true`) alongside `_hasHydrated`.
+- **`useActiveWorkoutStore` (`weightlifting-active-workout-v1`, `src/store/useActiveWorkoutStore.ts`):** Persists `draft: ActiveWorkoutDraft | null` (`userId`, `routineId`, `routineName`, `routineDayId`, `dayNumber`, `dayName`, `cycleNumber`, `daysInSplit`, `cyclesPerRoutine`, `startedAtTimestamp`, `durationSeconds`, `workoutExercises` including per-set `set_type` & `rir` and per-exercise `target_rep_min`, `target_rep_max`, `next_target_reps`, `is_unilateral`, `equipment`, `is_swapped`, `restTimerEndTimestamp`, `restTimerTotalSeconds`, `restTimerLabel`, `syncStatus: 'in_progress' | 'pending_sync'`, `savedSessionId`) alongside an in-memory `_hasHydrated` boolean.
+- **`usePreferencesStore` (`weightlifting-preferences-v1`, `src/store/usePreferencesStore.ts`, `version: 2` + `migrate`):** Persists `defaultRestSeconds: 45 | 60 | 90 | 120 | 180` (default `60`), `lockRestTimerToDefault: boolean` (default `true`), `supersetTransitionSeconds: 0 | 15 | 30 | 45` (default `0`), `hapticsEnabled: boolean` (default `true`), `filterByMyGym: boolean` (default `true`), `allowedEquipment: EquipmentType[]` (default `['dumbbell', 'bodyweight']`), and `maxDumbbellWeightLbs: number | null` (default `50`) alongside `_hasHydrated`.
 
 ### Built-In Seed Data (`supabase/seed.sql`)
-Inserts **1 system user** (`00000000-0000-0000-0000-000000000000`, `system@weightlog.local`), **12 global exercises**, and **20 muscle-group fractional rows** (note: **0** seeded exercises currently map to `'Core'`):
-
-| UUID Suffix | Exercise Name | Bodyweight Only | Rest Timer | Primary (`1.0`) | Secondary (`0.5`) |
-| :--- | :--- | :--- | :--- | :--- | :--- |
-| `...0001` | Barbell Bench Press | `false` | `120s` | Chest | Shoulders, Triceps |
-| `...0002` | Incline Dumbbell Press | `false` | `90s` | Chest | Shoulders |
-| `...0003` | Barbell Back Squat | `false` | `180s` | Legs | — |
-| `...0004` | Romanian Deadlift | `false` | `120s` | Legs | Back |
-| `...0005` | Pull-Up | `true` | `90s` | Back | Biceps |
-| `...0006` | Barbell Bent Over Row | `false` | `90s` | Back | Biceps |
-| `...0007` | Overhead Dumbbell Press | `false` | `90s` | Shoulders | Triceps |
-| `...0008` | Lateral Dumbbell Raise | `false` | `60s` | Shoulders | — |
-| `...0009` | Barbell Bicep Curl | `false` | `60s` | Biceps | — |
-| `...0010` | Tricep Rope Pushdown | `false` | `60s` | Triceps | — |
-| `...0011` | Dips | `true` | `90s` | Triceps | Chest |
-| `...0012` | Leg Extension | `false` | `60s` | Legs | — |
+Upserts the system seed user (`00000000-0000-0000-0000-000000000000`, `system@weightlog.local`), **`30` global exercises** (`...0001` through `...0030`), and fractional sub-muscle mappings across all **`11` sub-muscles** (`Chest`, `Lats`, `Upper Back`, `Shoulders`, `Quads`, `Hamstrings`, `Glutes`, `Calves`, `Biceps`, `Triceps`, `Core`):
+- **`...0001..0012` (Original Seed Catalog — Backfilled):** Accurate equipment values and sub-muscle remaps replacing `'Legs'`/`'Back'` (e.g., Barbell Back Squat -> `Quads 1.0` + `Glutes 0.5`; Romanian Deadlift -> `Hamstrings 1.0` + `Glutes 0.5` + `Upper Back 0.5`; Pull-Up -> `Lats 1.0` + `Biceps 0.5`).
+- **`...0013..0030` (18 Basement Express Seeds):** Unilateral & bilateral adjustable-dumbbell, incline-bench, and zero-rig bodyweight exercises (covering `Quads`, `Hamstrings`, `Glutes`, `Calves`, `Lats`, `Upper Back`, `Chest`, `Shoulders`, `Biceps`, `Triceps`, and `Core`) configured with `60s` default rest timers.
 
 ### Data Import, Export & Backup Capabilities
-- **CSV Export (Web-Only, Partial Schema):** `app/analytics/index.tsx` (`handleExportCSV`) exports flat set rows (`Date,Routine,Cycle,Exercise,Set,Weight(lbs),Reps,Completed,Estimated1RM(lbs),SetType,RIR`, setting `Estimated1RM(lbs)` to `0` on `warmup` rows and calling `calculateEstimated1RM` otherwise) via DOM `Blob` download **only when `Platform.OS === 'web'`**. On iOS and Android, tapping **Export CSV** is a silent no-op (`expo-file-system` / `expo-sharing` are not installed). Routines, split structures, custom exercises, and muscle mappings are not exported.
+- **CSV Export (Web-Only, Partial Schema):** `app/analytics/index.tsx` (`handleExportCSV`) exports flat set rows (`Date,Routine,Cycle,Exercise,Set,Weight(lbs),Reps,Completed,Estimated1RM(lbs),SetType,RIR,Unilateral,SetTonnage(lbs)`, setting `Estimated1RM(lbs)` to `0` on `warmup` rows and `SetTonnage(lbs)` to `getSetTonnage(w, r, isUnilateral)` for working completed sets else `0`) via DOM `Blob` download **only when `Platform.OS === 'web'`**. On iOS and Android, tapping **Export CSV** is a silent no-op (`expo-file-system` / `expo-sharing` are not installed). Routines, split structures, custom exercises, and muscle mappings are not exported.
 - **Data Import / Restore:** **None.** No CSV, JSON, Strong/Hevy import, or backup/restore mechanism exists.
 - **Cascade Deletion Mitigation:** Fixed in migration 7 (`20261113000000_data_safety_and_day_names.sql`): `sessions.routine_id`, `sessions.routine_day_id`, and `session_exercises.routine_exercise_id` use `ON DELETE SET NULL`, so deleting a routine or split day preserves all historical sessions, sets, and PRs under `sessions.user_id`.

@@ -71,7 +71,7 @@ export default function CycleCompareScreen() {
         const { data: sessionData } = await supabase
           .from('sessions')
           .select(
-            '*, routines(name), routine_days(day_number, name), session_exercises(*, exercises(id, name), session_sets(*))'
+            '*, routines(name), routine_days(day_number, name), session_exercises(*, exercises(*), session_sets(*))'
           )
           .eq('user_id', userId)
           .eq('routine_id', activeRId)

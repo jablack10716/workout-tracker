@@ -3,11 +3,31 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useState, useEffect } from 'react';
 import { Copy, Lock } from 'lucide-react-native';
 import { supabase } from '../../src/lib/supabase';
-import { usePreferencesStore } from '../../src/store/usePreferencesStore';
+import {
+  EQUIPMENT_LABELS,
+  EQUIPMENT_OPTIONS,
+  EquipmentType,
+  usePreferencesStore,
+} from '../../src/store/usePreferencesStore';
+import {
+  MUSCLE_GROUPS,
+  MuscleGroup,
+  buildLegacyMuscleGroupRows,
+  normalizeMuscleGroup,
+  resolveExerciseEquipment,
+} from '../../src/utils/analyticsEngine';
 
-const MUSCLE_GROUPS = ['Chest', 'Back', 'Shoulders', 'Legs', 'Biceps', 'Triceps', 'Core'] as const;
-type MuscleGroup = typeof MUSCLE_GROUPS[number];
 const SYSTEM_USER_ID = '00000000-0000-0000-0000-000000000000';
+
+const isSchemaColumnFallbackError = (err: any) =>
+  /column|schema cache|is_unilateral|equipment|PGRST204|42703/i.test(
+    `${err?.message || ''} ${err?.details || ''} ${err?.code || ''}`
+  );
+
+const isLegacyEnumError = (err: any) =>
+  /invalid input value for enum|muscle_group|22P02/i.test(
+    `${err?.message || ''} ${err?.details || ''} ${err?.code || ''}`
+  );
 
 export default function ExerciseEditor() {
   const { id } = useLocalSearchParams();
@@ -18,8 +38,10 @@ export default function ExerciseEditor() {
   const prefsHydrated = usePreferencesStore((s) => s._hasHydrated);
 
   const [name, setName] = useState('');
+  const [equipment, setEquipment] = useState<EquipmentType>('dumbbell');
   const [isBodyweightOnly, setIsBodyweightOnly] = useState(false);
-  const [restTimer, setRestTimer] = useState(String(defaultRestSeconds || 90));
+  const [isUnilateral, setIsUnilateral] = useState(false);
+  const [restTimer, setRestTimer] = useState(String(defaultRestSeconds || 60));
   const [restTimerTouched, setRestTimerTouched] = useState(false);
   const [primaryMuscle, setPrimaryMuscle] = useState<MuscleGroup | null>(null);
   const [secondaryMuscles, setSecondaryMuscles] = useState<MuscleGroup[]>([]);
@@ -38,7 +60,7 @@ export default function ExerciseEditor() {
 
   useEffect(() => {
     if (isNew && prefsHydrated && !restTimerTouched) {
-      setRestTimer(String(defaultRestSeconds || 90));
+      setRestTimer(String(defaultRestSeconds || 60));
     }
   }, [isNew, prefsHydrated, defaultRestSeconds, restTimerTouched]);
 
@@ -62,17 +84,51 @@ export default function ExerciseEditor() {
       setExerciseUserId(data.user_id || null);
       setName(data.name);
       setIsBodyweightOnly(data.is_bodyweight_only);
+      setIsUnilateral(Boolean(data.is_unilateral));
+      setEquipment(resolveExerciseEquipment(data));
       setRestTimer(data.default_rest_timer_seconds.toString());
 
-      // Load muscle mappings
-      const mappings: Array<{ muscle_group: MuscleGroup; fraction: number }> = data.exercise_muscle_groups || [];
-      const primary = mappings.find(m => Number(m.fraction) === 1.0);
-      const secondaries = mappings.filter(m => Number(m.fraction) === 0.5).map(m => m.muscle_group);
+      // Load and normalize muscle mappings
+      const mappings: Array<{ muscle_group: string; fraction: number }> =
+        data.exercise_muscle_groups || [];
+      const primary = mappings.find((m) => Number(m.fraction) === 1.0);
+      const normPrimary = primary
+        ? (normalizeMuscleGroup(primary.muscle_group) as MuscleGroup)
+        : null;
+      const seen = new Set<string>(normPrimary ? [normPrimary] : []);
+      const secondaries: MuscleGroup[] = [];
+      mappings
+        .filter((m) => Number(m.fraction) === 0.5)
+        .forEach((m) => {
+          const norm = normalizeMuscleGroup(m.muscle_group) as MuscleGroup;
+          if (!seen.has(norm) && MUSCLE_GROUPS.includes(norm)) {
+            seen.add(norm);
+            secondaries.push(norm);
+          }
+        });
 
-      if (primary) setPrimaryMuscle(primary.muscle_group);
+      if (normPrimary && MUSCLE_GROUPS.includes(normPrimary)) {
+        setPrimaryMuscle(normPrimary);
+      }
       setSecondaryMuscles(secondaries);
     }
     setLoading(false);
+  };
+
+  const handleSelectEquipment = (eq: EquipmentType) => {
+    if (isSystemExercise) return;
+    setEquipment(eq);
+    setIsBodyweightOnly(eq === 'bodyweight' || eq === 'pullup_dip_bar');
+  };
+
+  const handleToggleBodyweight = (val: boolean) => {
+    if (isSystemExercise) return;
+    setIsBodyweightOnly(val);
+    if (val && equipment !== 'bodyweight' && equipment !== 'pullup_dip_bar') {
+      setEquipment('bodyweight');
+    } else if (!val && (equipment === 'bodyweight' || equipment === 'pullup_dip_bar')) {
+      setEquipment('dumbbell');
+    }
   };
 
   const toggleSecondary = (muscle: MuscleGroup) => {
@@ -107,17 +163,29 @@ export default function ExerciseEditor() {
       return;
     }
 
-    const { data: cloned, error } = await supabase
+    const baseClonePayload = {
+      user_id: userId,
+      name: `${name.trim()} (Custom)`,
+      is_bodyweight_only: isBodyweightOnly,
+      default_rest_timer_seconds: parseInt(restTimer, 10) || defaultRestSeconds || 60,
+      updated_at: new Date().toISOString(),
+    };
+
+    let { data: cloned, error } = await supabase
       .from('exercises')
-      .insert([{
-        user_id: userId,
-        name: `${name.trim()} (Custom)`,
-        is_bodyweight_only: isBodyweightOnly,
-        default_rest_timer_seconds: parseInt(restTimer, 10) || defaultRestSeconds || 90,
-        updated_at: new Date().toISOString()
-      }])
+      .insert([{ ...baseClonePayload, is_unilateral: isUnilateral, equipment }])
       .select()
       .single();
+
+    if (error && isSchemaColumnFallbackError(error)) {
+      const retry = await supabase
+        .from('exercises')
+        .insert([baseClonePayload])
+        .select()
+        .single();
+      cloned = retry.data;
+      error = retry.error;
+    }
 
     if (error || !cloned) {
       showNotice('Duplicate Error', error?.message || 'Failed to duplicate exercise.');
@@ -130,9 +198,16 @@ export default function ExerciseEditor() {
       ...secondaryMuscles.map(m => ({ exercise_id: cloned.id, muscle_group: m, fraction: 0.5 }))
     ];
 
-    const { error: muscleError } = await supabase
+    let { error: muscleError } = await supabase
       .from('exercise_muscle_groups')
       .insert(muscleRows);
+
+    if (muscleError && isLegacyEnumError(muscleError)) {
+      const retryMuscles = await supabase
+        .from('exercise_muscle_groups')
+        .insert(buildLegacyMuscleGroupRows(muscleRows));
+      muscleError = retryMuscles.error;
+    }
 
     if (muscleError) {
       await supabase.from('exercises').delete().eq('id', cloned.id);
@@ -170,17 +245,30 @@ export default function ExerciseEditor() {
     }
 
     let exerciseId = id as string;
-    const resolvedRest = parseInt(restTimer, 10) || defaultRestSeconds || 90;
+    const resolvedRest = parseInt(restTimer, 10) || defaultRestSeconds || 60;
 
     if (isNew) {
-      const insertPayload = {
+      const baseInsertPayload = {
         user_id: userId,
         name: name.trim(),
         is_bodyweight_only: isBodyweightOnly,
         default_rest_timer_seconds: resolvedRest,
-        updated_at: new Date().toISOString()
+        updated_at: new Date().toISOString(),
       };
-      const { data, error } = await supabase.from('exercises').insert([insertPayload]).select().single();
+      let { data, error } = await supabase
+        .from('exercises')
+        .insert([{ ...baseInsertPayload, is_unilateral: isUnilateral, equipment }])
+        .select()
+        .single();
+      if (error && isSchemaColumnFallbackError(error)) {
+        const retry = await supabase
+          .from('exercises')
+          .insert([baseInsertPayload])
+          .select()
+          .single();
+        data = retry.data;
+        error = retry.error;
+      }
       if (error || !data) {
         showNotice('Error', error?.message || 'Failed to create exercise');
         setLoading(false);
@@ -188,13 +276,23 @@ export default function ExerciseEditor() {
       }
       exerciseId = data.id;
     } else {
-      const updatePayload = {
+      const baseUpdatePayload = {
         name: name.trim(),
         is_bodyweight_only: isBodyweightOnly,
         default_rest_timer_seconds: resolvedRest,
-        updated_at: new Date().toISOString()
+        updated_at: new Date().toISOString(),
       };
-      const { error } = await supabase.from('exercises').update(updatePayload).eq('id', exerciseId);
+      let { error } = await supabase
+        .from('exercises')
+        .update({ ...baseUpdatePayload, is_unilateral: isUnilateral, equipment })
+        .eq('id', exerciseId);
+      if (error && isSchemaColumnFallbackError(error)) {
+        const retry = await supabase
+          .from('exercises')
+          .update(baseUpdatePayload)
+          .eq('id', exerciseId);
+        error = retry.error;
+      }
       if (error) {
         showNotice('Error', error.message);
         setLoading(false);
@@ -221,7 +319,13 @@ export default function ExerciseEditor() {
       ...secondaryMuscles.map(m => ({ exercise_id: exerciseId, muscle_group: m, fraction: 0.5 }))
     ];
 
-    const { error: muscleError } = await supabase.from('exercise_muscle_groups').insert(muscleRows);
+    let { error: muscleError } = await supabase.from('exercise_muscle_groups').insert(muscleRows);
+    if (muscleError && isLegacyEnumError(muscleError)) {
+      const retryMuscles = await supabase
+        .from('exercise_muscle_groups')
+        .insert(buildLegacyMuscleGroupRows(muscleRows));
+      muscleError = retryMuscles.error;
+    }
     if (muscleError) {
       showNotice('Error', muscleError.message || 'Failed to save muscle group mappings.');
       setLoading(false);
@@ -363,12 +467,53 @@ export default function ExerciseEditor() {
           </View>
         </View>
 
+        {/* Equipment Selector */}
+        <View className="mb-4">
+          <Text className="text-slate-400 mb-2">Equipment</Text>
+          <View className="flex-row flex-wrap gap-2">
+            {EQUIPMENT_OPTIONS.map((eq) => {
+              const selected = equipment === eq;
+              return (
+                <TouchableOpacity
+                  key={eq}
+                  disabled={isSystemExercise}
+                  onPress={() => handleSelectEquipment(eq)}
+                  className={`px-3 py-1.5 rounded-xl border ${
+                    selected
+                      ? 'bg-emerald-600/30 border-emerald-500'
+                      : 'bg-slate-800 border-slate-700'
+                  } ${isSystemExercise && !selected ? 'opacity-50' : ''}`}
+                >
+                  <Text className={`text-xs font-semibold ${selected ? 'text-emerald-200' : 'text-slate-300'}`}>
+                    {EQUIPMENT_LABELS[eq]}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+        </View>
+
         <View className="flex-row justify-between items-center bg-slate-800 p-4 rounded-xl mt-2">
+          <View className="flex-1 mr-3">
+            <Text className="text-white font-semibold">Unilateral (Per-Side)</Text>
+            <Text className="text-slate-400 text-xs mt-0.5">
+              Log weight per limb and count 2× total tonnage in analytics.
+            </Text>
+          </View>
+          <Switch
+            value={isUnilateral}
+            disabled={isSystemExercise}
+            onValueChange={setIsUnilateral}
+            trackColor={{ false: '#334155', true: '#06b6d4' }}
+          />
+        </View>
+
+        <View className="flex-row justify-between items-center bg-slate-800 p-4 rounded-xl mt-3">
           <Text className="text-white">Bodyweight Only</Text>
           <Switch
             value={isBodyweightOnly}
             disabled={isSystemExercise}
-            onValueChange={setIsBodyweightOnly}
+            onValueChange={handleToggleBodyweight}
             trackColor={{ false: '#334155', true: '#3b82f6' }}
           />
         </View>

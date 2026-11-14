@@ -34,6 +34,7 @@ import Svg, { Circle } from 'react-native-svg';
 import { computeDashboardStats, DashboardStats } from '../../src/utils/dashboardMetrics';
 import {
   extractPersonalRecords,
+  getSetTonnage,
   getWeeklyVolumeHistory,
   getExerciseE1RMHistory,
   getMuscleGroupVolumeStatusList,
@@ -114,7 +115,7 @@ export default function DashboardScreen() {
         const { data: sessions } = await supabase
           .from('sessions')
           .select(
-            '*, routines(name), session_exercises(*, exercises(id, name, is_bodyweight_only, exercise_muscle_groups(*)), session_sets(*))'
+            '*, routines(name), session_exercises(*, exercises(*, exercise_muscle_groups(*)), session_sets(*))'
           )
           .eq('user_id', user.id)
           .order('started_at', { ascending: false });
@@ -391,7 +392,7 @@ export default function DashboardScreen() {
                       <Text className="text-slate-200 text-xs font-semibold">{ex.name}</Text>
                       {ex.targetWeight && !ex.isBodyweight && (
                         <Text className="text-indigo-400 text-xs font-bold ml-1.5">
-                          {ex.targetWeight} lbs
+                          {ex.targetWeight} lbs{ex.isUnilateral ? ' ea' : ''}
                         </Text>
                       )}
                       {ex.plannedSets > 0 && (
@@ -496,7 +497,9 @@ export default function DashboardScreen() {
                       {lift.exerciseName}
                     </Text>
                     <Text className="text-slate-400 text-xs">
-                      Max: {lift.maxWeight} lbs × {lift.maxRepsAtMaxWeight}
+                      {lift.isBodyweight
+                        ? `Max: BW × ${lift.maxRepsAtMaxWeight} reps`
+                        : `Max: ${lift.maxWeight} lbs${lift.isUnilateral ? ' ea' : ''} × ${lift.maxRepsAtMaxWeight}`}
                     </Text>
                   </View>
 
@@ -643,10 +646,15 @@ export default function DashboardScreen() {
               let sessionTonnage = 0;
               let sessionSets = 0;
               (session.session_exercises || []).forEach((se: any) => {
+                const isUnilateral = Boolean(se.exercises?.is_unilateral);
                 (se.session_sets || []).forEach((st: any) => {
                   if (isWorkingCompletedSet(st)) {
                     sessionSets += 1;
-                    sessionTonnage += (Number(st.weight) || 0) * (Number(st.reps) || 0);
+                    sessionTonnage += getSetTonnage(
+                      Number(st.weight) || 0,
+                      Number(st.reps) || 0,
+                      isUnilateral
+                    );
                   }
                 });
               });

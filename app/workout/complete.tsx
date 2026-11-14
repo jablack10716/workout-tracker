@@ -3,7 +3,12 @@ import { View, Text, TouchableOpacity, ScrollView, ActivityIndicator } from 'rea
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { supabase } from '../../src/lib/supabase';
 import { useActiveWorkoutStore } from '../../src/store/useActiveWorkoutStore';
-import { isWorkingCompletedSet } from '../../src/utils/analyticsEngine';
+import { usePreferencesStore } from '../../src/store/usePreferencesStore';
+import {
+  getSetTonnage,
+  isWorkingCompletedSet,
+  resolveExerciseEquipment,
+} from '../../src/utils/analyticsEngine';
 import { Trophy, Flame, Dumbbell, Clock, ArrowRight, CheckCircle, AlertCircle, RefreshCw } from 'lucide-react-native';
 
 export default function WorkoutCompleteScreen() {
@@ -95,7 +100,7 @@ export default function WorkoutCompleteScreen() {
             completedSetsSum++;
             const w = parseFloat(s.weight) || 0;
             const r = parseInt(s.reps, 10) || 0;
-            volumeSum += w * r;
+            volumeSum += getSetTonnage(w, r, Boolean(ex.is_unilateral));
           }
         });
       });
@@ -181,9 +186,17 @@ export default function WorkoutCompleteScreen() {
         }
       }
 
+      const maxDumbbellWeightLbs = usePreferencesStore.getState().maxDumbbellWeightLbs;
+
       // 2. Insert Session Exercises & Sets
       for (const ex of workoutPayload) {
         const workingSets = (ex.sets || []).filter((s: any) => isWorkingCompletedSet(s));
+        const eq = resolveExerciseEquipment({
+          equipment: ex.equipment,
+          is_bodyweight_only: ex.is_bodyweight_only,
+          name: ex.name,
+        });
+        const isDumbbell = eq === 'dumbbell';
 
         let resolvedTargetWeight: number | null = null;
         if (!ex.is_bodyweight_only) {
@@ -198,10 +211,27 @@ export default function WorkoutCompleteScreen() {
               resolvedTargetWeight = Math.max(...weights);
             }
           }
+          if (
+            isDumbbell &&
+            resolvedTargetWeight !== null &&
+            maxDumbbellWeightLbs !== null &&
+            maxDumbbellWeightLbs > 0 &&
+            !ex.is_target_weight_manually_edited
+          ) {
+            resolvedTargetWeight = Math.min(resolvedTargetWeight, maxDumbbellWeightLbs);
+          }
         }
 
+        const reachedDbCap =
+          !ex.is_bodyweight_only &&
+          isDumbbell &&
+          maxDumbbellWeightLbs !== null &&
+          maxDumbbellWeightLbs > 0 &&
+          resolvedTargetWeight !== null &&
+          resolvedTargetWeight >= maxDumbbellWeightLbs;
+
         let resolvedTargetReps: number | null = null;
-        if (ex.is_bodyweight_only) {
+        if (ex.is_bodyweight_only || reachedDbCap) {
           const parsedReps = parseInt(ex.next_target_reps, 10);
           if (!isNaN(parsedReps) && parsedReps > 0) {
             resolvedTargetReps = parsedReps;
@@ -317,39 +347,43 @@ export default function WorkoutCompleteScreen() {
 
         // Sync progressive overload target back to routine_exercises (never overwrite for session-only Swapped lifts)
         if (!ex.is_swapped) {
-          const updateRoutineTargetRow = async (payload: Record<string, any>) => {
-            const runUpdateWithFallback = async (
-              buildQuery: (p: Record<string, any>) => any
-            ): Promise<{ rows: any[] | null; error: any }> => {
-              const { data, error } = await buildQuery(payload).select('id');
-              if (
-                error &&
-                (error.message?.includes('target_rep_min') ||
-                  error.message?.includes('target_rep_max') ||
-                  error.message?.includes('schema cache'))
-              ) {
-                const { target_rep_min, target_rep_max, ...legacyPayload } = payload;
-                if (Object.keys(legacyPayload).length === 0) {
-                  return { rows: [], error: null };
-                }
-                const retry = await buildQuery(legacyPayload).select('id');
-                return { rows: retry.data, error: retry.error };
+          const runUpdateWithFallback = async (
+            payload: Record<string, any>,
+            buildQuery: (p: Record<string, any>) => any
+          ): Promise<{ rows: any[] | null; error: any }> => {
+            const { data, error } = await buildQuery(payload).select('id');
+            if (
+              error &&
+              (error.message?.includes('target_rep_min') ||
+                error.message?.includes('target_rep_max') ||
+                error.message?.includes('schema cache'))
+            ) {
+              const { target_rep_min, target_rep_max, ...legacyPayload } = payload;
+              if (Object.keys(legacyPayload).length === 0) {
+                return { rows: [], error: null };
               }
-              return { rows: data, error };
-            };
+              const retry = await buildQuery(legacyPayload).select('id');
+              return { rows: retry.data, error: retry.error };
+            }
+            return { rows: data, error };
+          };
 
+          const updateRoutineTargetRow = async (
+            currentDayPayload: Record<string, any>,
+            siblingWeight: number | null
+          ) => {
             let matchedById = false;
             if (ex.routine_exercise_id) {
-              const { rows } = await runUpdateWithFallback((p) =>
+              const { rows } = await runUpdateWithFallback(currentDayPayload, (p) =>
                 supabase.from('routine_exercises').update(p).eq('id', ex.routine_exercise_id)
               );
               matchedById = Boolean(rows && rows.length > 0);
             }
 
-            // Guardrail #4: if routine_exercises was replaced by Edit Split (0 rows affected by ID),
+            // Guardrail #4 (Phase 2): if routine_exercises was replaced by Edit Split (0 rows affected by ID),
             // match by (routine_day_id, exercise_id).
             if (!matchedById && routineDayId && ex.exercise_id) {
-              await runUpdateWithFallback((p) =>
+              await runUpdateWithFallback(currentDayPayload, (p) =>
                 supabase
                   .from('routine_exercises')
                   .update(p)
@@ -358,13 +392,21 @@ export default function WorkoutCompleteScreen() {
               );
             }
 
-            if (routineDayIds.length > 0 && ex.exercise_id) {
+            // Guardrail #3 (Phase 3A): sync ONLY target_weight across sibling days so differing day rep ranges
+            // never violate routine_exercises_rep_range_check (SQLSTATE 23514).
+            const siblingDayIds = routineDayIds.filter((id) => id !== routineDayId);
+            if (
+              !ex.is_bodyweight_only &&
+              siblingWeight !== null &&
+              siblingDayIds.length > 0 &&
+              ex.exercise_id
+            ) {
               try {
-                await runUpdateWithFallback((p) =>
+                await runUpdateWithFallback({ target_weight: siblingWeight }, (p) =>
                   supabase
                     .from('routine_exercises')
                     .update(p)
-                    .in('routine_day_id', routineDayIds)
+                    .in('routine_day_id', siblingDayIds)
                     .eq('exercise_id', ex.exercise_id)
                 );
               } catch (syncErr) {
@@ -373,15 +415,27 @@ export default function WorkoutCompleteScreen() {
             }
           };
 
+          const currentDayPayload: Record<string, any> = {};
           if (!ex.is_bodyweight_only && resolvedTargetWeight !== null) {
-            await updateRoutineTargetRow({ target_weight: resolvedTargetWeight });
-          } else if (ex.is_bodyweight_only && resolvedTargetReps !== null) {
-            const clampedMin = Math.min(ex.target_rep_min ?? resolvedTargetReps, resolvedTargetReps);
-            await updateRoutineTargetRow({
-              target_reps: resolvedTargetReps,
-              target_rep_min: clampedMin,
-              target_rep_max: resolvedTargetReps,
-            });
+            currentDayPayload.target_weight = resolvedTargetWeight;
+          }
+          if ((ex.is_bodyweight_only || reachedDbCap) && resolvedTargetReps !== null) {
+            const existingMin =
+              Number(ex.target_rep_min) > 0 ? Number(ex.target_rep_min) : resolvedTargetReps;
+            const existingMax =
+              Number(ex.target_rep_max) >= existingMin
+                ? Number(ex.target_rep_max)
+                : Math.max(existingMin, resolvedTargetReps);
+            const safeMin = Math.max(1, Math.min(existingMin, resolvedTargetReps));
+            const safeMax = Math.max(safeMin, existingMax, resolvedTargetReps);
+
+            currentDayPayload.target_reps = resolvedTargetReps;
+            currentDayPayload.target_rep_min = safeMin;
+            currentDayPayload.target_rep_max = safeMax;
+          }
+
+          if (Object.keys(currentDayPayload).length > 0) {
+            await updateRoutineTargetRow(currentDayPayload, resolvedTargetWeight);
           }
         }
       }

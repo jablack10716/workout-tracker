@@ -96,9 +96,16 @@ export const CycleComparisonView: React.FC<CycleComparisonViewProps> = ({ compar
             >
               {/* Exercise Title & Delta Badges */}
               <View className="flex-row justify-between items-center mb-2.5">
-                <Text className="text-white font-bold text-base flex-1 mr-2" numberOfLines={1}>
-                  {latestEx.exerciseName}
-                </Text>
+                <View className="flex-row items-center flex-1 mr-2">
+                  <Text className="text-white font-bold text-base flex-shrink" numberOfLines={1}>
+                    {latestEx.exerciseName}
+                  </Text>
+                  {latestEx.isUnilateral && (
+                    <View className="ml-2 bg-cyan-500/15 border border-cyan-500/30 px-1.5 py-0.5 rounded">
+                      <Text className="text-cyan-300 text-[9px] font-extrabold uppercase">PER SIDE</Text>
+                    </View>
+                  )}
+                </View>
                 {prevEx && (
                   <View className="flex-row items-center gap-1.5">
                     {weightDelta !== 0 && (
@@ -152,7 +159,7 @@ export const CycleComparisonView: React.FC<CycleComparisonViewProps> = ({ compar
                         Set {curSet.set_number}
                       </Text>
                       <Text className="text-slate-400 text-xs flex-1 text-center">
-                        {pSet ? `${pSet.weight} × ${pSet.reps}` : '—'}
+                        {pSet ? `${pSet.weight}${latestEx.isUnilateral && pSet.weight > 0 ? ' ea' : ''} × ${pSet.reps}` : '—'}
                       </Text>
                       <View className="flex-1 items-center flex-row justify-center">
                         <Text
@@ -160,7 +167,7 @@ export const CycleComparisonView: React.FC<CycleComparisonViewProps> = ({ compar
                             improved ? 'text-emerald-400' : 'text-white'
                           }`}
                         >
-                          {curSet.weight} × {curSet.reps}
+                          {curSet.weight}{latestEx.isUnilateral && curSet.weight > 0 ? ' ea' : ''} × {curSet.reps}
                         </Text>
                         {improved && <Text className="text-emerald-400 text-[10px] ml-1">✓</Text>}
                       </View>

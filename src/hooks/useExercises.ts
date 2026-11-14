@@ -5,6 +5,8 @@ export type Exercise = {
   id: string;
   name: string;
   is_bodyweight_only: boolean;
+  is_unilateral?: boolean;
+  equipment?: string;
   default_rest_timer_seconds: number;
   exercise_muscle_groups?: Array<{ muscle_group: string; fraction: number }>;
 };

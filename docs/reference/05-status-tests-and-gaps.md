@@ -1,8 +1,8 @@
 > **Reference Pack Metadata**
 > - **App Name:** Best Damn Weight Lifting Tracker Ever (`weightliftinglog` / UI Banner: *Best Damn Workout Tracker Ever*)
-> - **Git Commit SHA & Branch:** `9a6f80e` (`main`) + Phase 1 & Phase 2 Working Tree Updates — Base Commit `2026-09-30 18:54:32 -0500`
+> - **Git Commit SHA & Branch:** `193549d` (`main`) + Phase 3A Basement Express Working Tree Updates — Base Commit `2026-11-14 08:30:17 -0600`
 > - **Snapshot Date:** `2026-11-14`
-> - **File Scope:** Automated test suite inventory and coverage gaps, feature flags, environment variable catalog (names and purposes only), third-party integrations, Phase 1 & Phase 2 resolution status, and a candid Staff Architect audit of remaining bugs, stubbed features, UX friction, scalability bottlenecks, and technical debt.
+> - **File Scope:** Automated test suite inventory and coverage gaps, feature flags, environment variable catalog (names and purposes only), third-party integrations, Phase 1, Phase 2 & Phase 3A resolution status, and a candid Staff Architect audit of remaining bugs, stubbed features, UX friction, scalability bottlenecks, and technical debt.
 
 # 05 — Status, Tests & Gaps
 
@@ -14,13 +14,13 @@
 | **Integration Tests** | **0** | None installed | `0` Supabase / PostgREST / RLS automated tests |
 | **End-to-End (E2E) Tests** | **0** | None installed | No Maestro, Detox, Playwright, or Cypress setup |
 | **Total Automated Tests** | **0** | No `"test"` script in `package.json` | `npx tsc --noEmit` passes cleanly (`0` errors); `npx expo export -p web` bundles `2,673` modules cleanly |
-| **Manual SQL Validation** | **1** *(manual)* | `supabase/snippets/phase1_rls_validation.sql` | 55-line SQL inspection script (migrations 7 & 8 unverified against a live Postgres DB on this host) |
+| **Manual SQL Validation** | **1** *(manual)* | `supabase/snippets/phase1_rls_validation.sql` | 55-line SQL inspection script (migrations 7–9 unverified against a live Postgres DB on this host) |
 
 ### Critical Untested Areas
-1. **Pure Domain Math (`src/utils/analyticsEngine.ts`, `dashboardMetrics.ts`, `supersetSynergy.ts`, `autoRegEngine.ts`):** Warmup exclusion (`isWorkingCompletedSet`), ACSM volume landmarks (`evaluateHypertrophyVolume`), Epley 1RM edge cases, fractional superset synergy (`getSupersetSynergy`) and day guardrails (`evaluateSplitDayGuardrails`), Monday week-boundary bucketing, and `analyzeCycleProgression` lack automated unit tests.
-2. **Workout Persistence, Crash Recovery & Edit-Split Tolerance (`src/store/useActiveWorkoutStore.ts`, `app/workout/active.tsx`, `app/workout/complete.tsx`):** AsyncStorage hydration race handling, dead-zone retry recovery (`pending_sync` + `savedSessionId`), Swap Exercise / trailing Set & Round deletion, `(routine_day_id, exercise_id)` target sync fallback after Edit Split, and Migration #8 schema-cache fallbacks lack automated tests.
-3. **Row-Level Security & Migrations 7–8 (`supabase/migrations/`):** Zero automated verification against live Postgres (`supabase` CLI is absent on this host).
-4. **UI Flows (`app/`):** Routine Builder Edit Split hydration/reordering, superset transition countdowns vs full recovery timers, and SetType/RIR cycling.
+1. **Pure Domain Math (`src/utils/analyticsEngine.ts`, `dashboardMetrics.ts`, `supersetSynergy.ts`, `autoRegEngine.ts`):** Warmup exclusion (`isWorkingCompletedSet`), `2x` unilateral tonnage (`getSetTonnage`), 11-sub-muscle normalization (`normalizeMuscleGroup`), equipment filtering (`matchesEquipmentFilter`), `25/35 lb` DB starting defaults (`getDefaultStartingWeight`), rep-PR trophies at DB caps & bodyweight, ACSM volume landmarks (`evaluateHypertrophyVolume`), Epley 1RM edge cases, fractional superset synergy (`getSupersetSynergy`), `estimateSplitDayMinutes`, and `evaluateSplitDayGuardrails` lack automated unit tests.
+2. **Workout Persistence, Crash Recovery & Smart 50 lb Cap Sync (`src/store/useActiveWorkoutStore.ts`, `usePreferencesStore.ts`, `app/workout/active.tsx`, `app/workout/complete.tsx`):** AsyncStorage hydration race handling & v2 preference migration, legacy draft `is_unilateral`/`equipment` backfill, dead-zone retry recovery (`pending_sync` + `savedSessionId`), Swap Exercise / trailing Set & Round deletion, 50 lb DB cap `+1` rep progression & `safeMin`/`safeMax` check safety, and Migrations 5/7/8/9 schema-cache fallbacks lack automated tests.
+3. **Row-Level Security & Migrations 7–9 (`supabase/migrations/`):** Zero automated verification against live Postgres (`supabase` CLI is absent on this host).
+4. **UI Flows (`app/`):** Routine Builder Edit Split hydration/reordering, My Gym equipment filters, express timer override & superset transition countdowns, and SetType/RIR cycling.
 
 ---
 
@@ -28,7 +28,7 @@
 
 ### Active Feature Flags
 - **Application Feature Flags:** **None** (`0` runtime flags, remote config providers, or feature-toggle modules).
-- **Runtime Schema Compatibility Fallbacks:** `app/routine-builder/new.tsx`, `app/workout/active.tsx`, and `app/workout/complete.tsx` inspect PostgREST errors for missing column / `'schema cache'` responses across Migrations 5, 7, and 8 (`superset_id`, `superset_order`, `routine_days.name`, `target_rep_min`, `target_rep_max`, `set_type`, `rir`) and degrade gracefully when connected to an unmigrated remote schema.
+- **Runtime Schema Compatibility Fallbacks:** `app/routine-builder/new.tsx`, `app/exercises/[id].tsx`, `app/workout/active.tsx`, and `app/workout/complete.tsx` inspect PostgREST errors for missing column / `'schema cache'` / enum responses across Migrations 5, 7, 8, and 9 (`superset_id`, `superset_order`, `routine_days.name`, `target_rep_min`, `target_rep_max`, `set_type`, `rir`, `is_unilateral`, `equipment`, legacy enum translation via `buildLegacyMuscleGroupRows`) and select `exercises(*)` across reads so all screens degrade gracefully when connected to an unmigrated remote schema.
 
 ### Environment Variables (Names & Purposes Only — No Secrets)
 
@@ -46,7 +46,7 @@
 
 ---
 
-## 3. Candid Architectural Audit: Phase 1 & Phase 2 Resolutions & Remaining Gaps
+## 3. Candid Architectural Audit: Phase 1, Phase 2 & Phase 3A Resolutions & Remaining Gaps
 
 ### 3.1 Phase 1 Resolved Issues (Implemented & Type-Checked)
 The following data-safety, gym-floor persistence, and high-priority bugs were resolved in Phase 1 (pending remote execution of migration 7 on live Supabase):
@@ -67,20 +67,27 @@ The following superset ergonomics, split-editing, and exercise-science programmi
 3. **Set Types, RIR, Global Warmup Exclusion & CSV Columns (`SetRow.tsx`, `analyticsEngine.ts`, `dashboardMetrics.ts`, `active.tsx`, `complete.tsx`, `history/*`, `analytics/index.tsx`):** Wired tap-to-cycle `set_type` (`normal | warmup | drop | failure`) and `RIR` (`—/0/1/2/3/4+`) badges into `session_sets`, guarded working-set cloning and historical pre-fill from warmup pollution, excluded warmups across every tonnage/set/e1RM/PR/volume/heatmap/KPI loop, and appended `SetType,RIR` (`Estimated1RM = 0` for warmups) to Web CSV export.
 4. **ACSM Landmarks, Rep Ranges, Split Guardrails, Radar Targets & Bodyweight Parity (`supersetSynergy.ts`, `analyticsEngine.ts`, `RadarChart.tsx`, `analytics/index.tsx`, `active.tsx`, `complete.tsx`):** Added `target_rep_min`/`max`, non-blocking heavy-lift / `>15` sets-per-day guardrails, `0 / <6 / 6–9.5 / 10–22 / >22` volume landmarks, active-split `RadarChart` planned targets (`12s` fallback), and bodyweight `BW` / `next_target_reps` progressive overload parity.
 
-### 3.3 Remaining Functional Bugs
+### 3.3 Phase 3A (Basement Express Edition) Resolved Issues (Implemented & Type-Checked)
+The following Basement Express features (50 lb adjustable dumbbell cap, 60s supersets, 11-sub-muscle taxonomy & unilateral `2x` tonnage math) have been resolved in the current working tree (pending remote execution of Migration #9 on live Supabase):
+1. **11-Sub-Muscle Taxonomy, Equipment Column, Unilateral Flag & 30-Seed Catalog (`20261115000000_phase3a_basement_gym_submuscles_and_unilateral.sql`, `seed.sql`):** Expanded `public.muscle_group` enum (`'Lats'`, `'Upper Back'`, `'Quads'`, `'Hamstrings'`, `'Glutes'`, `'Calves'`) outside `BEGIN/COMMIT`, added `exercises.is_unilateral` & `exercises.equipment` (`CHECK` including `'pullup_dip_bar'`), guarded seed FKs (`auth.users` upsert + `WHERE EXISTS`), collision-safely migrated user `'Back'/'Legs'` mappings, backfilled `...0001..0012`, and seeded `18` Basement Express lifts (`...0013..0030`) at `60s` rest.
+2. **My Gym Filter, 50 lb DB Cap, Express Timers & 25/35 lb Starting Defaults (`usePreferencesStore.ts` v2, `settings.tsx`, `exercises.tsx`, `exercises/[id].tsx`, `routine-builder/new.tsx`, `active.tsx`):** Added `My Gym (DB + BW)` / `Dumbbell` / `Bodyweight` / `All` filter chips, `maxDumbbellWeightLbs = 50`, `45s` rest option, `defaultRestSeconds = 60` + `lockRestTimerToDefault = true`, `25 lb` unilateral / `35 lb` bilateral DB defaults, `estimateSplitDayMinutes` Express Duration pills, and `getSupersetEquipmentTip` dial-change hints.
+3. **True Leg/Back Antagonist Superset Synergy (`src/utils/supersetSynergy.ts`, `analyticsEngine.ts`, `RadarChart.tsx`):** Added `'Quads' ↔ 'Hamstrings'` & `'Chest' ↔ 'Lats'|'Upper Back'` antagonist detection, updated `RadarChart` to 11 compact axis labels (`"11-Muscle Group Volumetric Matrix"`), and updated `evaluateSplitDayGuardrails` dynamically across 11 sub-muscles.
+4. **Unilateral Per-Limb Math (`2x` Tonnage, `1x` e1RM/PRs), Dashboard Rep-PR Trophies & Smart 50 lb Cap Double Progression (`analyticsEngine.ts`, `dashboardMetrics.ts`, `SetRow.tsx`, `active.tsx`, `complete.tsx`, `(tabs)/index.tsx`, `history/*`, `analytics/index.tsx`):** Applied `getSetTonnage` uniformly (including `ConsistencyHeatmap`, Dashboard, History, Analytics, & CSV `+Unilateral,SetTonnage(lbs)`), displayed `PER SIDE` / `lbs ea` hints, awarded Dashboard rep-PR trophies at weight caps and on bodyweight lifts, enforced `safeMin`/`safeMax` (`target_rep_min <= target_rep_max`) on current day writes while syncing only `target_weight` across sibling days, and standardized reads on `exercises(*)`.
+
+### 3.4 Remaining Functional Bugs
 1. **CSV Export Native No-Op (`app/analytics/index.tsx`):**
    `handleExportCSV` executes only inside `if (Platform.OS === 'web')` and silently does nothing on iOS or Android (`expo-file-system` / `expo-sharing` are not installed).
 
-### 3.4 Half-Built, Orphaned & Stubbed Features
-- **Static DB Health Card (`app/settings.tsx`):** While rest timer defaults, superset transition breathers, and haptics toggles are persisted via `usePreferencesStore`, the `"Local Supabase DB: Connected & Active"` status card remains hardcoded static text.
+### 3.5 Half-Built, Orphaned & Stubbed Features
+- **Static DB Health Card (`app/settings.tsx`):** While rest timer defaults, express override, superset transition breathers, haptics, and My Gym/cap settings are persisted via `usePreferencesStore`, the `"Local Supabase DB: Connected & Active"` status card remains hardcoded static text.
 - **Autoregulation & Post-Workout Feedback (`src/utils/autoRegEngine.ts`, `src/components/MuscleFeedbackModal.tsx`):** `MuscleFeedbackModal`, `calculateVolumeDelta`, and `calculateNextLoadAndReps` (written in `kg`!) remain unmounted and unused, with no backing database table. Only `getTargetRIR` is called on Dashboard & Active Workout header, and it returns `3 RIR` for all cycles `>= 5` regardless of `routines.cycles_per_routine`.
 - **Routine Completion & `"Clone & Repeat"` (`requirements.md` §6):** `routines.cycles_per_routine` and `routine_status = 'completed'` exist in the schema, but `workout/complete.tsx` increments `current_cycle` indefinitely without archiving completed routines or offering baseline promotion cloning.
 - **Weighted / Assisted Calisthenics (`requirements.md` §1.3 & §5.1):** Bodyweight-only lifts (`is_bodyweight_only = true`) now support full `BW` UI parity and `next_target_reps` progression, whereas weighted (`BW + load`) and assisted calisthenics remain unsupported.
 - **Locked Month Picker (`app/history/index.tsx`):** `selectedMonth` and `selectedYear` states exist without prev/next month controls.
 - **Orphaned Dev Auth (`src/lib/auth.ts`):** `ensureAuthenticated()` with hardcoded local dev credentials (`dev@weightliftinglog.local` / `password123`) is dead code.
 
-### 3.5 Performance Bottlenecks, Technical Debt & Remaining Backup Risks
-- **Unapplied Live Migrations on This Host:** Migrations 7 (`20261113000000_data_safety_and_day_names.sql`) and 8 (`20261114000000_phase2_supersets_and_programming.sql`) are written and statically audited, but global `supabase` CLI is absent on this machine and they have not yet been applied or verified against a running Postgres instance.
+### 3.6 Performance Bottlenecks, Technical Debt & Remaining Backup Risks
+- **Unapplied Live Migrations on This Host:** Migrations 7 (`20261113000000_data_safety_and_day_names.sql`), 8 (`20261114000000_phase2_supersets_and_programming.sql`), and 9 (`20261115000000_phase3a_basement_gym_submuscles_and_unilateral.sql`) are written and statically audited, but global `supabase` CLI is absent on this machine and they have not yet been applied or verified against a running Postgres instance.
 - **Non-Transactional Multi-Step Client Writes:** Routine creation (`new.tsx`), routine activation (`routines.tsx`), exercise muscle updates (`exercises/[id].tsx`), and workout completion (`complete.tsx`) still execute sequential PostgREST HTTP calls from the client rather than atomic PostgreSQL RPC transactions.
 - **Unpaginated Full-History Queries & PostgREST `1,000`-Row Cap:** Dashboard, History, and Analytics each execute `SELECT *, session_exercises(*, session_sets(*))` across *all* user sessions on every screen focus (`useFocusEffect`) with zero caching or pagination. Heavy users will eventually hit `max_rows = 1000` in `supabase/config.toml`, silently truncating older sessions and corrupting lifetime tonnage/PRs.
 - **Widespread `any` Typing:** Supabase query responses across `app/` and `src/utils/` rely heavily on untyped `any` rather than generated `Database` types (`supabase gen types typescript`).

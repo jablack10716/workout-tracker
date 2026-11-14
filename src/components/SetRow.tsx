@@ -11,6 +11,7 @@ export interface SetRowProps {
   setStyle?: SetType;
   rir?: number | null;
   isBodyweightOnly?: boolean;
+  isUnilateral?: boolean;
   weight: string;
   reps: string;
   prevPerformance?: string; // e.g. "135 lbs × 10"
@@ -63,6 +64,7 @@ export const SetRow: React.FC<SetRowProps> = ({
   setStyle = 'normal',
   rir = null,
   isBodyweightOnly = false,
+  isUnilateral = false,
   weight,
   reps,
   prevPerformance,
@@ -143,7 +145,7 @@ export const SetRow: React.FC<SetRowProps> = ({
             }`}
             style={{ textAlignVertical: 'center', includeFontPadding: false }}
             keyboardType="numeric"
-            placeholder="lbs"
+            placeholder={isUnilateral ? 'lbs ea' : 'lbs'}
             placeholderTextColor="#475569"
             value={weight}
             onChangeText={onChangeWeight}

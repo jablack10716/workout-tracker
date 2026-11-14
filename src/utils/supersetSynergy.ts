@@ -1,4 +1,9 @@
-import { MuscleGroup, MUSCLE_GROUPS } from './analyticsEngine';
+import {
+  MuscleGroup,
+  MUSCLE_GROUPS,
+  normalizeMuscleGroup,
+  resolveExerciseEquipment,
+} from './analyticsEngine';
 
 export type SupersetSynergyType =
   | 'competing'
@@ -41,16 +46,24 @@ export interface SplitDayGuardrailsResult {
 const VALID_MUSCLE_GROUP_SET: ReadonlySet<string> = new Set<MuscleGroup>(MUSCLE_GROUPS);
 const UPPER_BODY_MUSCLES: ReadonlySet<MuscleGroup> = new Set<MuscleGroup>([
   'Chest',
-  'Back',
+  'Lats',
+  'Upper Back',
   'Shoulders',
   'Biceps',
   'Triceps',
 ]);
-const LOWER_BODY_MUSCLES: ReadonlySet<MuscleGroup> = new Set<MuscleGroup>(['Legs']);
+const LOWER_BODY_MUSCLES: ReadonlySet<MuscleGroup> = new Set<MuscleGroup>([
+  'Quads',
+  'Hamstrings',
+  'Glutes',
+  'Calves',
+]);
 
 function toValidMuscleGroup(raw: string | undefined | null): MuscleGroup | null {
-  if (!raw || !VALID_MUSCLE_GROUP_SET.has(raw)) return null;
-  return raw as MuscleGroup;
+  if (!raw) return null;
+  const normalized = normalizeMuscleGroup(raw);
+  if (!VALID_MUSCLE_GROUP_SET.has(normalized)) return null;
+  return normalized as MuscleGroup;
 }
 
 function getExerciseMuscleFractions(ex: SynergyExerciseInput): {
@@ -138,25 +151,30 @@ export function getSupersetSynergy(
     };
   }
 
-  // 3. Antagonist pair: Chest+Back or Biceps+Triceps without competing primaries or synergist overlap
-  const isChestBack = allPrimaries.has('Chest') && allPrimaries.has('Back');
+  // 3. Antagonist pair: Chest+(Lats|Upper Back), Biceps+Triceps, or Quads+Hamstrings
+  const isChestBack =
+    allPrimaries.has('Chest') &&
+    (allPrimaries.has('Lats') || allPrimaries.has('Upper Back'));
   const isBicepsTriceps = allPrimaries.has('Biceps') && allPrimaries.has('Triceps');
-  const onlyClassicAntagonistUpper = Array.from(allPrimaries).every((mg) =>
-    UPPER_BODY_MUSCLES.has(mg)
-  );
+  const isQuadHam = allPrimaries.has('Quads') && allPrimaries.has('Hamstrings');
 
-  if ((isChestBack || isBicepsTriceps) && onlyClassicAntagonistUpper) {
+  const onlyUpper = Array.from(allPrimaries).every((mg) => UPPER_BODY_MUSCLES.has(mg));
+  const onlyLower = Array.from(allPrimaries).every((mg) => LOWER_BODY_MUSCLES.has(mg));
+
+  if (((isChestBack || isBicepsTriceps) && onlyUpper) || (isQuadHam && onlyLower)) {
     return {
       type: 'antagonist',
       label: 'Antagonist Pair',
-      description: 'Opposing upper-body muscles alternate work & recovery',
+      description: isQuadHam
+        ? 'Opposing lower-body muscles alternate work & recovery'
+        : 'Opposing upper-body muscles alternate work & recovery',
       bgClass: 'bg-emerald-500/20',
       borderClass: 'border-emerald-500/40',
       textClass: 'text-emerald-300',
     };
   }
 
-  // 4. Upper / Lower split: Strictly upper-body primary + lower-body ('Legs') primary
+  // 4. Upper / Lower split: Strictly upper-body primary + lower-body primary
   const hasUpperPrimary = Array.from(allPrimaries).some((mg) => UPPER_BODY_MUSCLES.has(mg));
   const hasLowerPrimary = Array.from(allPrimaries).some((mg) => LOWER_BODY_MUSCLES.has(mg));
 
@@ -182,6 +200,41 @@ export function getSupersetSynergy(
   };
 }
 
+export interface SupersetEquipmentTip {
+  label: string;
+  description: string;
+}
+
+/**
+ * Surfaces a non-blocking equipment tip when 2+ dumbbell exercises in a superset require different weights.
+ */
+export function getSupersetEquipmentTip(
+  exercises: Array<{
+    equipment?: string | null;
+    is_bodyweight_only?: boolean | null;
+    target_weight?: number | string | null;
+    name?: string | null;
+  }>
+): SupersetEquipmentTip | null {
+  if (!exercises || exercises.length < 2) return null;
+
+  const dbWeights = exercises
+    .filter((ex) => !ex.is_bodyweight_only && resolveExerciseEquipment(ex) === 'dumbbell')
+    .map((ex) => Number(ex.target_weight))
+    .filter((w) => Number.isFinite(w) && w > 0);
+
+  if (dbWeights.length < 2) return null;
+  const distinct = Array.from(new Set(dbWeights)).sort((a, b) => a - b);
+  if (distinct.length < 2) return null;
+
+  const minW = distinct[0];
+  const maxW = distinct[distinct.length - 1];
+  return {
+    label: `⚡ Dial Change (${minW} ↔ ${maxW} lb)`,
+    description: 'Pair with a bodyweight move or add 15s transition if dialing one DB set',
+  };
+}
+
 /**
  * Evaluates a single split day for non-blocking science guardrails:
  * 1) >2 heavy low-rep lifts (<=6 reps) OR a heavy low-rep lift ordered after higher-rep work
@@ -198,15 +251,10 @@ export function evaluateSplitDayGuardrails(
   let seenHigherRep = false;
   let heavyAfterHigherRep = false;
 
-  const dayMuscleSets: Record<MuscleGroup, number> = {
-    Chest: 0,
-    Back: 0,
-    Shoulders: 0,
-    Legs: 0,
-    Biceps: 0,
-    Triceps: 0,
-    Core: 0,
-  };
+  const dayMuscleSets = {} as Record<MuscleGroup, number>;
+  MUSCLE_GROUPS.forEach((mg) => {
+    dayMuscleSets[mg] = 0;
+  });
 
   for (const ex of exercises) {
     const rawRepMax = Number(ex.target_rep_max ?? ex.target_reps ?? 10);

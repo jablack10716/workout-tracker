@@ -1,10 +1,12 @@
+import { EQUIPMENT_OPTIONS, EquipmentType } from '../store/usePreferencesStore';
+
 /**
  * Exercise Science Analytics & Metrics Engine
  * 
  * Implements standard biomechanics and exercise physiology models:
  * - 1-Rep Max estimation (Epley and Brzycki equations)
- * - Volume Load (Tonnage = Weight × Reps × Sets)
- * - Muscle Group Volume Allocation (Fractional Synergy Mapping)
+ * - Volume Load (Tonnage = Weight × Reps × Sets × LimbMultiplier)
+ * - Muscle Group Volume Allocation (11-Sub-Muscle Fractional Synergy Mapping)
  * - Training Density (Volume / Duration)
  * - Hypertrophy Volume Benchmarks (MEV, MAV, MRV thresholds)
  * - Personal Record (PR) Multi-Vector Detection
@@ -13,9 +15,13 @@
 
 export const MUSCLE_GROUPS = [
   'Chest',
-  'Back',
+  'Lats',
+  'Upper Back',
   'Shoulders',
-  'Legs',
+  'Quads',
+  'Hamstrings',
+  'Glutes',
+  'Calves',
   'Biceps',
   'Triceps',
   'Core',
@@ -25,11 +31,137 @@ export type MuscleGroup = (typeof MUSCLE_GROUPS)[number];
 
 export type SetType = 'normal' | 'warmup' | 'drop' | 'failure';
 
+export type EquipmentFilterMode = 'my_gym' | 'dumbbell' | 'bodyweight' | 'all';
+
 /**
  * Canonical filter returning true only for completed working sets (excluding warmup sets).
  */
 export function isWorkingCompletedSet(st: any): boolean {
   return Boolean(st?.is_completed && (st?.set_type || 'normal') !== 'warmup');
+}
+
+/**
+ * Normalizes legacy coarse muscle group labels ('Back', 'Legs') into the 11-sub-muscle taxonomy.
+ */
+export function normalizeMuscleGroup(raw: string): MuscleGroup | string {
+  if (raw === 'Back') return 'Upper Back';
+  if (raw === 'Legs') return 'Quads';
+  return raw;
+}
+
+/**
+ * Maps 11-sub-muscle labels back to the legacy 7-value database enum for unmigrated remote DB fallbacks.
+ */
+export function toLegacyMuscleGroup(
+  group: string
+): 'Chest' | 'Back' | 'Shoulders' | 'Legs' | 'Biceps' | 'Triceps' | 'Core' {
+  switch (group) {
+    case 'Lats':
+    case 'Upper Back':
+    case 'Back':
+      return 'Back';
+    case 'Quads':
+    case 'Hamstrings':
+    case 'Glutes':
+    case 'Calves':
+    case 'Legs':
+      return 'Legs';
+    case 'Chest':
+    case 'Shoulders':
+    case 'Biceps':
+    case 'Triceps':
+    case 'Core':
+      return group;
+    default:
+      return 'Core';
+  }
+}
+
+/**
+ * Converts 11-sub-muscle insert rows into legacy 7-muscle rows deduplicated by (exercise_id, muscle_group).
+ */
+export function buildLegacyMuscleGroupRows<
+  T extends { exercise_id?: string; muscle_group: string; fraction: number }
+>(rows: T[]): T[] {
+  const dedup = new Map<string, T>();
+  rows.forEach((row) => {
+    const legacyGroup = toLegacyMuscleGroup(row.muscle_group);
+    const key = `${row.exercise_id || ''}::${legacyGroup}`;
+    const existing = dedup.get(key);
+    if (!existing || row.fraction > existing.fraction) {
+      dedup.set(key, { ...row, muscle_group: legacyGroup });
+    }
+  });
+  return Array.from(dedup.values());
+}
+
+/**
+ * Resolves exercise equipment with safe fallback inference when querying an unmigrated remote schema.
+ */
+export function resolveExerciseEquipment(exercise: any): EquipmentType {
+  const raw = exercise?.equipment;
+  if (typeof raw === 'string' && (EQUIPMENT_OPTIONS as readonly string[]).includes(raw)) {
+    return raw as EquipmentType;
+  }
+
+  const name = String(exercise?.name || '');
+  if (exercise?.is_bodyweight_only) {
+    return /pull-?up|chin-?up|\bdips?\b/i.test(name) ? 'pullup_dip_bar' : 'bodyweight';
+  }
+  if (/barbell/i.test(name)) return 'barbell';
+  if (/cable|pushdown/i.test(name)) return 'cable';
+  if (/machine|leg extension|leg press/i.test(name)) return 'machine';
+  if (/kettlebell/i.test(name)) return 'kettlebell';
+  if (/\bband\b/i.test(name)) return 'band';
+  return 'dumbbell';
+}
+
+/**
+ * Shared equipment chip predicate used by Exercise Library, Routine Builder, and Swap Exercise modals.
+ */
+export function matchesEquipmentFilter(
+  exercise: any,
+  mode: EquipmentFilterMode,
+  allowedEquipment: EquipmentType[]
+): boolean {
+  if (mode === 'all') return true;
+  const eq = resolveExerciseEquipment(exercise);
+  if (mode === 'dumbbell') return eq === 'dumbbell';
+  if (mode === 'bodyweight') return eq === 'bodyweight';
+  return allowedEquipment.includes(eq);
+}
+
+/**
+ * Returns default starting load for brand-new exercises without history or programmed targets.
+ */
+export function getDefaultStartingWeight(
+  exercise: any,
+  maxDumbbellWeightLbs: number | null
+): number {
+  if (exercise?.is_bodyweight_only) return 0;
+  const eq = resolveExerciseEquipment(exercise);
+  const isUni = Boolean(exercise?.is_unilateral);
+  if (eq === 'dumbbell') {
+    const base = isUni ? 25 : 35;
+    return maxDumbbellWeightLbs && maxDumbbellWeightLbs > 0
+      ? Math.min(base, maxDumbbellWeightLbs)
+      : base;
+  }
+  return isUni ? 35 : 135;
+}
+
+/**
+ * Computes set tonnage, multiplying single-limb (unilateral) lifts by 2 for total work volume.
+ */
+export function getSetTonnage(
+  weight: number,
+  reps: number,
+  isUnilateral?: boolean
+): number {
+  const w = Number(weight) || 0;
+  const r = Number(reps) || 0;
+  if (w <= 0 || r <= 0) return 0;
+  return w * r * (isUnilateral ? 2 : 1);
 }
 
 export interface PREntry {
@@ -42,6 +174,7 @@ export interface PREntry {
   dateAchieved: string;
   sessionId?: string;
   isBodyweight: boolean;
+  isUnilateral?: boolean;
 }
 
 export interface E1RMDataPoint {
@@ -98,6 +231,7 @@ export interface CycleComparison {
     exercises: Array<{
       exerciseId: string;
       exerciseName: string;
+      isUnilateral?: boolean;
       totalVolume: number;
       topWeight: number;
       topReps: number;
@@ -153,6 +287,7 @@ export function extractPersonalRecords(sessions: any[]): PREntry[] {
       const exId = se.exercises?.id || se.exercise_id;
       const exName = se.exercises?.name || 'Exercise';
       const isBw = Boolean(se.exercises?.is_bodyweight_only);
+      const isUni = Boolean(se.exercises?.is_unilateral);
 
       if (!exId) return;
 
@@ -167,14 +302,17 @@ export function extractPersonalRecords(sessions: any[]): PREntry[] {
           dateAchieved: sessionDate,
           sessionId,
           isBodyweight: isBw,
+          isUnilateral: isUni,
         };
+      } else if (isUni) {
+        prMap[exId].isUnilateral = true;
       }
 
       (se.session_sets || []).forEach((st: any) => {
         if (!isWorkingCompletedSet(st)) return;
         const w = Number(st.weight) || 0;
         const r = Number(st.reps) || 0;
-        const setVolume = w * r;
+        const setVolume = getSetTonnage(w, r, isUni);
         const e1rm = calculateEstimated1RM(w, r);
 
         const currentPr = prMap[exId];
@@ -278,12 +416,13 @@ export function getSessionVolumeHistory(sessions: any[]): VolumeDataPoint[] {
     let sets = 0;
 
     (session.session_exercises || []).forEach((se: any) => {
+      const isUni = Boolean(se.exercises?.is_unilateral);
       (se.session_sets || []).forEach((st: any) => {
         if (isWorkingCompletedSet(st)) {
           sets += 1;
           const w = Number(st.weight) || 0;
           const r = Number(st.reps) || 0;
-          volume += w * r;
+          volume += getSetTonnage(w, r, isUni);
         }
       });
     });
@@ -368,6 +507,7 @@ export function getWeeklyVolumeHistory(
     weekMap[key].workoutCount += 1;
 
     (s.session_exercises || []).forEach((se: any) => {
+      const isUni = Boolean(se.exercises?.is_unilateral);
       const muscleMappings: Array<{ muscle_group: string; fraction: number }> =
         se.exercises?.exercise_muscle_groups || [];
 
@@ -376,11 +516,11 @@ export function getWeeklyVolumeHistory(
         const w = Number(st.weight) || 0;
         const r = Number(st.reps) || 0;
         weekMap[key].totalSets += 1;
-        weekMap[key].totalVolume += w * r;
+        weekMap[key].totalVolume += getSetTonnage(w, r, isUni);
 
         if (muscleMappings.length > 0) {
           muscleMappings.forEach((m) => {
-            const grp = m.muscle_group;
+            const grp = normalizeMuscleGroup(m.muscle_group);
             const frac = Number(m.fraction) || 1.0;
             if (weekMap[key].muscleSets[grp] !== undefined) {
               weekMap[key].muscleSets[grp] += frac;
@@ -486,11 +626,13 @@ export function analyzeCycleProgression(
     (s.session_exercises || []).forEach((se: any) => {
       const exId = se.exercises?.id || se.exercise_id;
       const exName = se.exercises?.name || 'Exercise';
+      const isUni = Boolean(se.exercises?.is_unilateral);
 
       if (!exMap[exId]) {
         exMap[exId] = {
           exerciseId: exId,
           exerciseName: exName,
+          isUnilateral: isUni,
           totalVolume: 0,
           topWeight: 0,
           topReps: 0,
@@ -504,7 +646,7 @@ export function analyzeCycleProgression(
           completedSets++;
           const w = Number(st.weight) || 0;
           const r = Number(st.reps) || 0;
-          const setVol = w * r;
+          const setVol = getSetTonnage(w, r, isUni);
           const e1rm = calculateEstimated1RM(w, r);
 
           totalVolume += setVol;
@@ -515,7 +657,10 @@ export function analyzeCycleProgression(
             reps: r,
           });
 
-          if (w > exMap[exId].topWeight) {
+          if (
+            w > exMap[exId].topWeight ||
+            (w === exMap[exId].topWeight && r > exMap[exId].topReps)
+          ) {
             exMap[exId].topWeight = w;
             exMap[exId].topReps = r;
           }

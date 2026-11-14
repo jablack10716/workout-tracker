@@ -3,9 +3,28 @@ import { View, Text, TextInput, TouchableOpacity, ScrollView, Alert, ActivityInd
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { supabase } from '../../src/lib/supabase';
-import { usePreferencesStore } from '../../src/store/usePreferencesStore';
-import { MUSCLE_GROUPS, isWorkingCompletedSet, getHypertrophyVolumeMeta } from '../../src/utils/analyticsEngine';
-import { getSupersetSynergy, evaluateSplitDayGuardrails } from '../../src/utils/supersetSynergy';
+import {
+  EQUIPMENT_LABELS,
+  EQUIPMENT_OPTIONS,
+  EquipmentType,
+  usePreferencesStore,
+} from '../../src/store/usePreferencesStore';
+import {
+  MUSCLE_GROUPS,
+  EquipmentFilterMode,
+  isWorkingCompletedSet,
+  getHypertrophyVolumeMeta,
+  normalizeMuscleGroup,
+  resolveExerciseEquipment,
+  matchesEquipmentFilter,
+  getDefaultStartingWeight,
+  buildLegacyMuscleGroupRows,
+} from '../../src/utils/analyticsEngine';
+import {
+  getSupersetSynergy,
+  evaluateSplitDayGuardrails,
+  getSupersetEquipmentTip,
+} from '../../src/utils/supersetSynergy';
 import {
   X,
   Plus,
@@ -22,12 +41,18 @@ import {
   Layers,
   Link2,
   Unlink,
+  Clock,
 } from 'lucide-react-native';
 
 function isMissingColumnError(err: any, colNames: string[]): boolean {
   const haystack = `${err?.message || ''} ${err?.details || ''} ${err?.hint || ''}`.toLowerCase();
   if (haystack.includes('schema cache')) return true;
   return colNames.some((col) => haystack.includes(col.toLowerCase()));
+}
+
+function isLegacyEnumError(err: any): boolean {
+  const haystack = `${err?.message || ''} ${err?.details || ''} ${err?.code || ''}`.toLowerCase();
+  return haystack.includes('invalid input value for enum') || haystack.includes('22p02');
 }
 
 function getDefaultDayName(dayNumber: number, totalDays: number): string {
@@ -41,6 +66,9 @@ type ExerciseOption = {
   id: string;
   name: string;
   is_bodyweight_only: boolean;
+  is_unilateral?: boolean;
+  equipment?: string;
+  default_rest_timer_seconds?: number;
   exercise_muscle_groups?: Array<{ muscle_group: string; fraction: number }>;
 };
 
@@ -53,6 +81,9 @@ type RoutineExerciseItem = {
   target_rep_max: number | string;
   target_weight: number | string | null;
   is_bodyweight_only: boolean;
+  is_unilateral?: boolean;
+  equipment?: EquipmentType;
+  default_rest_timer_seconds?: number;
   muscle_groups: Array<{ muscle_group: string; fraction: number }>;
   superset_id?: string | null;
   superset_order?: number;
@@ -65,12 +96,79 @@ type DaySplit = {
   exercises: RoutineExerciseItem[];
 };
 
+type DayBlockMeta =
+  | { type: 'standalone'; indices: [number] }
+  | { type: 'superset'; supersetId: string; indices: number[] };
+
+function estimateSplitDayMinutes(
+  dayExercises: RoutineExerciseItem[],
+  blocks: DayBlockMeta[],
+  options: {
+    defaultRestSeconds: number;
+    lockRestTimerToDefault: boolean;
+    supersetTransitionSeconds: number;
+  }
+): number {
+  if (!dayExercises.length || !blocks.length) return 0;
+
+  let totalSec = 0;
+  blocks.forEach((block, blockIdx) => {
+    const isLastBlock = blockIdx === blocks.length - 1;
+    if (block.type === 'standalone') {
+      const ex = dayExercises[block.indices[0]];
+      if (!ex) return;
+      const sets = Math.max(1, parseInt(String(ex.planned_sets || 3), 10) || 3);
+      const workSec = ex.is_unilateral ? 55 : 35;
+      const restSec = options.lockRestTimerToDefault
+        ? options.defaultRestSeconds
+        : ex.default_rest_timer_seconds || options.defaultRestSeconds || 60;
+      const restIntervals = isLastBlock ? Math.max(0, sets - 1) : sets;
+      totalSec += sets * workSec + restIntervals * restSec;
+    } else {
+      const members = block.indices.map((idx) => dayExercises[idx]).filter(Boolean);
+      if (members.length === 0) return;
+      const rounds = Math.max(
+        1,
+        ...members.map((m) => parseInt(String(m.planned_sets || 3), 10) || 3)
+      );
+      for (let round = 1; round <= rounds; round++) {
+        const active = members.filter(
+          (m) => (parseInt(String(m.planned_sets || 3), 10) || 3) >= round
+        );
+        if (active.length === 0) continue;
+        active.forEach((m) => {
+          totalSec += m.is_unilateral ? 55 : 35;
+        });
+        totalSec += Math.max(0, active.length - 1) * options.supersetTransitionSeconds;
+        const isVeryLastSetOfDay = isLastBlock && round === rounds;
+        if (!isVeryLastSetOfDay) {
+          const restSec = options.lockRestTimerToDefault
+            ? options.defaultRestSeconds
+            : Math.max(
+                ...active.map(
+                  (m) => m.default_rest_timer_seconds || options.defaultRestSeconds || 60
+                )
+              );
+          totalSec += restSec;
+        }
+      }
+    }
+  });
+
+  return totalSec > 0 ? Math.max(1, Math.round(totalSec / 60)) : 0;
+}
+
 export default function RoutineBuilderScreen() {
   const router = useRouter();
   const params = useLocalSearchParams<{ routineId?: string }>();
   const editingRoutineId = Array.isArray(params.routineId) ? params.routineId[0] : params.routineId;
   const insets = useSafeAreaInsets();
   const defaultRestSeconds = usePreferencesStore((s) => s.defaultRestSeconds);
+  const lockRestTimerToDefault = usePreferencesStore((s) => s.lockRestTimerToDefault);
+  const supersetTransitionSeconds = usePreferencesStore((s) => s.supersetTransitionSeconds);
+  const filterByMyGym = usePreferencesStore((s) => s.filterByMyGym);
+  const allowedEquipment = usePreferencesStore((s) => s.allowedEquipment);
+  const maxDumbbellWeightLbs = usePreferencesStore((s) => s.maxDumbbellWeightLbs);
   const [step, setStep] = useState<1 | 2 | 3>(1); // 1: Setup, 2: Assign, 3: Volumetric Sandbox Review
   const [loading, setLoading] = useState(false);
   const [hydratingRoutine, setHydratingRoutine] = useState(Boolean(editingRoutineId));
@@ -152,19 +250,39 @@ export default function RoutineBuilderScreen() {
   const [availableExercises, setAvailableExercises] = useState<ExerciseOption[]>([]);
   const [fetchingExercises, setFetchingExercises] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
+  const [pickerEquipmentFilter, setPickerEquipmentFilter] = useState<EquipmentFilterMode>(
+    filterByMyGym ? 'my_gym' : 'all'
+  );
 
-  // Filtered exercises based on search query
+  useEffect(() => {
+    setPickerEquipmentFilter(filterByMyGym ? 'my_gym' : 'all');
+  }, [filterByMyGym]);
+
+  const myGymChipLabel =
+    allowedEquipment.length === 2 &&
+    allowedEquipment.includes('dumbbell') &&
+    allowedEquipment.includes('bodyweight')
+      ? 'My Gym (DB + BW)'
+      : 'My Gym';
+
+  // Filtered exercises based on equipment chip & search query
   const filteredExercises = useMemo(() => {
-    if (!searchQuery.trim()) return availableExercises;
     const q = searchQuery.toLowerCase().trim();
     return availableExercises.filter((ex) => {
-      const nameMatch = ex.name.toLowerCase().includes(q);
-      const muscleMatch = ex.exercise_muscle_groups?.some(m =>
-        m.muscle_group.toLowerCase().includes(q)
-      );
+      if (!matchesEquipmentFilter(ex, pickerEquipmentFilter, allowedEquipment)) {
+        return false;
+      }
+      if (!q) return true;
+      const eqLabel = EQUIPMENT_LABELS[resolveExerciseEquipment(ex)].toLowerCase();
+      const nameMatch = ex.name.toLowerCase().includes(q) || eqLabel.includes(q);
+      const muscleMatch = ex.exercise_muscle_groups?.some((m) => {
+        const raw = m.muscle_group.toLowerCase();
+        const norm = String(normalizeMuscleGroup(m.muscle_group)).toLowerCase();
+        return raw.includes(q) || norm.includes(q);
+      });
       return nameMatch || muscleMatch;
     });
-  }, [availableExercises, searchQuery]);
+  }, [availableExercises, searchQuery, pickerEquipmentFilter, allowedEquipment]);
 
   // New Exercise Inline Creation State
   const [showCreateForm, setShowCreateForm] = useState(false);
@@ -172,7 +290,9 @@ export default function RoutineBuilderScreen() {
   const [newExName, setNewExName] = useState('');
   const [newExPrimaryMuscle, setNewExPrimaryMuscle] = useState<string>('Chest');
   const [newExSecondaryMuscles, setNewExSecondaryMuscles] = useState<string[]>([]);
+  const [newExEquipment, setNewExEquipment] = useState<EquipmentType>('dumbbell');
   const [newExIsBodyweight, setNewExIsBodyweight] = useState(false);
+  const [newExIsUnilateral, setNewExIsUnilateral] = useState(false);
 
   // Load available exercises from library
   const fetchAvailableExercises = async () => {
@@ -271,7 +391,14 @@ export default function RoutineBuilderScreen() {
                     ? Number(re.target_weight)
                     : null,
                 is_bodyweight_only: Boolean(exObj.is_bodyweight_only),
-                muscle_groups: exObj.exercise_muscle_groups || [],
+                is_unilateral: Boolean(exObj.is_unilateral),
+                equipment: resolveExerciseEquipment(exObj),
+                default_rest_timer_seconds:
+                  Number(exObj.default_rest_timer_seconds) || defaultRestSeconds || 60,
+                muscle_groups: (exObj.exercise_muscle_groups || []).map((m: any) => ({
+                  ...m,
+                  muscle_group: String(normalizeMuscleGroup(m.muscle_group)),
+                })),
                 superset_id: re.superset_id || null,
                 superset_order: re.superset_order || 1,
               };
@@ -315,39 +442,64 @@ export default function RoutineBuilderScreen() {
     }
 
     try {
-      // 1. Insert exercise
-      const { data: exData, error: exErr } = await supabase
+      // 1. Insert exercise with fallback for unmigrated schema
+      const baseInsertPayload = {
+        user_id: userId,
+        name: newExName.trim(),
+        is_bodyweight_only: newExIsBodyweight,
+        default_rest_timer_seconds: defaultRestSeconds || 60,
+        updated_at: new Date().toISOString(),
+      };
+      let { data: exData, error: exErr } = await supabase
         .from('exercises')
-        .insert([{
-          user_id: userId,
-          name: newExName.trim(),
-          is_bodyweight_only: newExIsBodyweight,
-          default_rest_timer_seconds: defaultRestSeconds || 90,
-          updated_at: new Date().toISOString()
-        }])
+        .insert([{ ...baseInsertPayload, is_unilateral: newExIsUnilateral, equipment: newExEquipment }])
         .select()
         .single();
 
+      if (exErr && isMissingColumnError(exErr, ['is_unilateral', 'equipment'])) {
+        const retryEx = await supabase
+          .from('exercises')
+          .insert([baseInsertPayload])
+          .select()
+          .single();
+        exData = retryEx.data;
+        exErr = retryEx.error;
+      }
+
       if (exErr || !exData) throw exErr || new Error('Failed to create exercise');
 
-      // 2. Insert muscle groups
+      // 2. Insert muscle groups (with legacy enum fallback)
       const muscleRows = [
         { exercise_id: exData.id, muscle_group: newExPrimaryMuscle, fraction: 1.0 },
-        ...newExSecondaryMuscles.filter(m => m !== newExPrimaryMuscle).map(m => ({
-          exercise_id: exData.id,
-          muscle_group: m,
-          fraction: 0.5
-        }))
+        ...newExSecondaryMuscles
+          .filter((m) => m !== newExPrimaryMuscle)
+          .map((m) => ({
+            exercise_id: exData.id,
+            muscle_group: m,
+            fraction: 0.5,
+          })),
       ];
 
-      const { error: muscleErr } = await supabase.from('exercise_muscle_groups').insert(muscleRows);
+      let { error: muscleErr } = await supabase.from('exercise_muscle_groups').insert(muscleRows);
+      if (muscleErr && isLegacyEnumError(muscleErr)) {
+        const retryMuscles = await supabase
+          .from('exercise_muscle_groups')
+          .insert(buildLegacyMuscleGroupRows(muscleRows));
+        muscleErr = retryMuscles.error;
+      }
       if (muscleErr) throw muscleErr;
 
       const createdOption: ExerciseOption = {
         id: exData.id,
         name: exData.name,
         is_bodyweight_only: exData.is_bodyweight_only,
-        exercise_muscle_groups: muscleRows.map(r => ({ muscle_group: r.muscle_group, fraction: r.fraction }))
+        is_unilateral: exData.is_unilateral ?? newExIsUnilateral,
+        equipment: exData.equipment ?? newExEquipment,
+        default_rest_timer_seconds: exData.default_rest_timer_seconds ?? (defaultRestSeconds || 60),
+        exercise_muscle_groups: muscleRows.map((r) => ({
+          muscle_group: r.muscle_group,
+          fraction: r.fraction,
+        })),
       };
 
       // Refresh list & select exercise
@@ -360,7 +512,9 @@ export default function RoutineBuilderScreen() {
       setNewExName('');
       setNewExPrimaryMuscle('Chest');
       setNewExSecondaryMuscles([]);
+      setNewExEquipment('dumbbell');
       setNewExIsBodyweight(false);
+      setNewExIsUnilateral(false);
     } catch (err: any) {
       setCreatingExercise(false);
       Alert.alert('Create Error', err.message || 'Failed to create exercise');
@@ -369,6 +523,12 @@ export default function RoutineBuilderScreen() {
 
   // Add exercise to currently active day (optionally to a superset)
   const handleAddExerciseToActiveDay = async (ex: ExerciseOption, supersetId?: string | null) => {
+    const resolvedEq = resolveExerciseEquipment(ex);
+    const clampDbCap = (w: number) =>
+      resolvedEq === 'dumbbell' && maxDumbbellWeightLbs && maxDumbbellWeightLbs > 0
+        ? Math.min(w, maxDumbbellWeightLbs)
+        : w;
+
     let initialWeight: number | null = null;
 
     if (!ex.is_bodyweight_only) {
@@ -400,11 +560,16 @@ export default function RoutineBuilderScreen() {
 
           const workingSet = (data || []).find((row: any) => isWorkingCompletedSet(row));
           if (workingSet && workingSet.weight !== null && workingSet.weight !== undefined) {
-            initialWeight = Number(workingSet.weight);
+            initialWeight = clampDbCap(Number(workingSet.weight));
           }
         }
       } catch (err) {
         console.error('Error fetching last completed weight:', err);
+      }
+
+      // Guardrail #4: Brand-new dumbbell lifts default to 25 (unilateral) / 35 (bilateral) clamped to cap
+      if (initialWeight === null) {
+        initialWeight = getDefaultStartingWeight(ex, maxDumbbellWeightLbs);
       }
     }
 
@@ -414,7 +579,7 @@ export default function RoutineBuilderScreen() {
 
       let supersetOrder = 1;
       if (supersetId) {
-        const existingInSuperset = currentDayExercises.filter(e => e.superset_id === supersetId);
+        const existingInSuperset = currentDayExercises.filter((e) => e.superset_id === supersetId);
         supersetOrder = existingInSuperset.length + 1;
       }
 
@@ -427,9 +592,16 @@ export default function RoutineBuilderScreen() {
         target_rep_max: 12,
         target_weight: initialWeight,
         is_bodyweight_only: ex.is_bodyweight_only,
-        muscle_groups: ex.exercise_muscle_groups || [],
+        is_unilateral: Boolean(ex.is_unilateral),
+        equipment: resolvedEq,
+        default_rest_timer_seconds:
+          Number(ex.default_rest_timer_seconds) || defaultRestSeconds || 60,
+        muscle_groups: (ex.exercise_muscle_groups || []).map((m) => ({
+          ...m,
+          muscle_group: String(normalizeMuscleGroup(m.muscle_group)),
+        })),
         superset_id: supersetId || null,
-        superset_order: supersetId ? supersetOrder : 1
+        superset_order: supersetId ? supersetOrder : 1,
       };
 
       if (supersetId) {
@@ -672,23 +844,18 @@ export default function RoutineBuilderScreen() {
     });
   };
 
-  // Calculate Real-time Volumetric Vector Impact across entire routine
+  // Calculate Real-time Volumetric Vector Impact across entire routine (11 sub-muscles)
   const muscleVolumes = useMemo(() => {
-    const volumes: Record<string, number> = {
-      Chest: 0,
-      Back: 0,
-      Shoulders: 0,
-      Legs: 0,
-      Biceps: 0,
-      Triceps: 0,
-      Core: 0
-    };
+    const volumes: Record<string, number> = {};
+    MUSCLE_GROUPS.forEach((mg) => {
+      volumes[mg] = 0;
+    });
 
     days.forEach((day) => {
       day.exercises.forEach((ex) => {
         const sets = Number(ex.planned_sets) || 0;
         ex.muscle_groups.forEach((m) => {
-          const groupName = m.muscle_group;
+          const groupName = String(normalizeMuscleGroup(m.muscle_group));
           const fraction = Number(m.fraction) || 1.0;
           if (volumes[groupName] !== undefined) {
             volumes[groupName] += sets * fraction;
@@ -1118,41 +1285,87 @@ export default function RoutineBuilderScreen() {
 
               {/* Active Day Exercise List */}
               <ScrollView className="flex-1">
-                <View className="mb-4">
-                  <TextInput
-                    className="text-white font-bold text-lg bg-slate-900/90 px-4 py-2.5 rounded-xl border border-slate-800 mb-2.5"
-                    value={days[activeDayIndex]?.name}
-                    placeholder="Day Name"
-                    placeholderTextColor="#64748b"
-                    onChangeText={(text) => {
-                      setDays((prev) => {
-                        const copy = [...prev];
-                        copy[activeDayIndex] = { ...copy[activeDayIndex], name: text };
-                        return copy;
-                      });
-                    }}
-                  />
-                  <View className="flex-row gap-2">
-                    <TouchableOpacity
-                      onPress={() => {
-                        setTargetSupersetIdForPicker(null);
-                        setPickerVisible(true);
-                      }}
-                      className="flex-1 bg-blue-600/30 border border-blue-500/50 py-2.5 px-3 rounded-xl flex-row items-center justify-center"
-                    >
-                      <Plus color="#60a5fa" size={16} className="mr-1.5" />
-                      <Text className="text-blue-300 font-bold text-xs sm:text-sm">+ Exercise</Text>
-                    </TouchableOpacity>
+                {(() => {
+                  const activeDay = days[activeDayIndex];
+                  const activeBlocks = getDayBlocks(activeDay?.exercises || []);
+                  const estMinutes = estimateSplitDayMinutes(
+                    activeDay?.exercises || [],
+                    activeBlocks,
+                    {
+                      defaultRestSeconds,
+                      lockRestTimerToDefault,
+                      supersetTransitionSeconds,
+                    }
+                  );
+                  const badgeStyle =
+                    estMinutes <= 20
+                      ? {
+                          container: 'bg-emerald-500/20 border-emerald-500/40',
+                          text: 'text-emerald-300',
+                          icon: '#6ee7b7',
+                        }
+                      : estMinutes <= 30
+                      ? {
+                          container: 'bg-amber-500/20 border-amber-500/40',
+                          text: 'text-amber-300',
+                          icon: '#fcd34d',
+                        }
+                      : {
+                          container: 'bg-indigo-500/20 border-indigo-500/40',
+                          text: 'text-indigo-300',
+                          icon: '#a5b4fc',
+                        };
 
-                    <TouchableOpacity
-                      onPress={handleStartAddSuperset}
-                      className="flex-1 bg-indigo-600/30 border border-indigo-500/50 py-2.5 px-3 rounded-xl flex-row items-center justify-center"
-                    >
-                      <Layers color="#a78bfa" size={16} className="mr-1.5" />
-                      <Text className="text-indigo-300 font-bold text-xs sm:text-sm">+ Superset</Text>
-                    </TouchableOpacity>
-                  </View>
-                </View>
+                  return (
+                    <View className="mb-4">
+                      <View className="flex-row items-center gap-2 mb-2.5">
+                        <TextInput
+                          className="flex-1 text-white font-bold text-lg bg-slate-900/90 px-4 py-2.5 rounded-xl border border-slate-800"
+                          value={activeDay?.name}
+                          placeholder="Day Name"
+                          placeholderTextColor="#64748b"
+                          onChangeText={(text) => {
+                            setDays((prev) => {
+                              const copy = [...prev];
+                              copy[activeDayIndex] = { ...copy[activeDayIndex], name: text };
+                              return copy;
+                            });
+                          }}
+                        />
+                        {estMinutes > 0 && (
+                          <View
+                            className={`px-3 py-2.5 rounded-xl border flex-row items-center ${badgeStyle.container}`}
+                          >
+                            <Clock color={badgeStyle.icon} size={14} className="mr-1.5" />
+                            <Text className={`text-xs font-extrabold ${badgeStyle.text}`}>
+                              ~{estMinutes} min
+                            </Text>
+                          </View>
+                        )}
+                      </View>
+                      <View className="flex-row gap-2">
+                        <TouchableOpacity
+                          onPress={() => {
+                            setTargetSupersetIdForPicker(null);
+                            setPickerVisible(true);
+                          }}
+                          className="flex-1 bg-blue-600/30 border border-blue-500/50 py-2.5 px-3 rounded-xl flex-row items-center justify-center"
+                        >
+                          <Plus color="#60a5fa" size={16} className="mr-1.5" />
+                          <Text className="text-blue-300 font-bold text-xs sm:text-sm">+ Exercise</Text>
+                        </TouchableOpacity>
+
+                        <TouchableOpacity
+                          onPress={handleStartAddSuperset}
+                          className="flex-1 bg-indigo-600/30 border border-indigo-500/50 py-2.5 px-3 rounded-xl flex-row items-center justify-center"
+                        >
+                          <Layers color="#a78bfa" size={16} className="mr-1.5" />
+                          <Text className="text-indigo-300 font-bold text-xs sm:text-sm">+ Superset</Text>
+                        </TouchableOpacity>
+                      </View>
+                    </View>
+                  );
+                })()}
 
                 {days[activeDayIndex]?.exercises.length === 0 ? (
                   <View className="bg-slate-900/40 border border-dashed border-slate-800 p-8 rounded-2xl items-center justify-center my-6">
@@ -1242,7 +1455,14 @@ export default function RoutineBuilderScreen() {
                               <View key={`standalone_${exIdx}`} className="bg-slate-900 p-4 rounded-2xl border border-slate-800 mb-3">
                                 <View className="flex-row justify-between items-center mb-3">
                                   <View className="flex-1 mr-2">
-                                    <Text className="text-white font-bold text-base">{ex.name}</Text>
+                                    <View className="flex-row items-center flex-wrap gap-1.5">
+                                      <Text className="text-white font-bold text-base">{ex.name}</Text>
+                                      {ex.is_unilateral ? (
+                                        <View className="bg-cyan-500/20 border border-cyan-500/40 px-1.5 py-0.5 rounded">
+                                          <Text className="text-cyan-300 text-[9px] font-extrabold tracking-wider">PER SIDE</Text>
+                                        </View>
+                                      ) : null}
+                                    </View>
                                     <Text className="text-slate-400 text-xs">
                                       {ex.muscle_groups?.map(m => m.muscle_group).join(', ') || 'No muscle group'}
                                     </Text>
@@ -1322,7 +1542,9 @@ export default function RoutineBuilderScreen() {
                                   </View>
                                   {!ex.is_bodyweight_only && (
                                     <View className="flex-1 bg-slate-800 p-2.5 rounded-xl">
-                                      <Text className="text-slate-400 text-[11px] mb-1">Target lbs</Text>
+                                      <Text className="text-slate-400 text-[11px] mb-1">
+                                        {ex.is_unilateral ? 'Target lbs (ea)' : 'Target lbs'}
+                                      </Text>
                                       <TextInput
                                         className="text-white font-bold text-sm"
                                         keyboardType="decimal-pad"
@@ -1348,6 +1570,7 @@ export default function RoutineBuilderScreen() {
                             originalIndex: origIdx,
                           }));
                           const synergy = getSupersetSynergy(groupItems.map((g) => g.exercise));
+                          const equipTip = getSupersetEquipmentTip(groupItems.map((g) => g.exercise));
 
                           return (
                             <View key={`superset_${sId}`} className="bg-indigo-950/20 border-2 border-indigo-500/40 rounded-3xl p-4 mb-4">
@@ -1362,6 +1585,13 @@ export default function RoutineBuilderScreen() {
                                     <View className={`px-2 py-0.5 rounded-md border ${synergy.bgClass} ${synergy.borderClass}`}>
                                       <Text className={`text-[11px] font-bold ${synergy.textClass}`}>
                                         {synergy.label}
+                                      </Text>
+                                    </View>
+                                  )}
+                                  {equipTip && (
+                                    <View className="px-2 py-0.5 rounded-md border bg-amber-500/20 border-amber-500/40">
+                                      <Text className="text-[11px] font-bold text-amber-300">
+                                        {equipTip.label}
                                       </Text>
                                     </View>
                                   )}
@@ -1408,7 +1638,14 @@ export default function RoutineBuilderScreen() {
                                           <Text className="text-indigo-300 font-mono font-bold text-xs">{tag}</Text>
                                         </View>
                                         <View className="flex-1">
-                                          <Text className="text-white font-bold text-sm">{exItem.name}</Text>
+                                          <View className="flex-row items-center flex-wrap gap-1.5">
+                                            <Text className="text-white font-bold text-sm">{exItem.name}</Text>
+                                            {exItem.is_unilateral ? (
+                                              <View className="bg-cyan-500/20 border border-cyan-500/40 px-1.5 py-0.5 rounded">
+                                                <Text className="text-cyan-300 text-[9px] font-extrabold tracking-wider">PER SIDE</Text>
+                                              </View>
+                                            ) : null}
+                                          </View>
                                           <Text className="text-slate-400 text-[11px]">
                                             {exItem.muscle_groups?.map(m => m.muscle_group).join(', ') || 'No muscle group'}
                                           </Text>
@@ -1492,7 +1729,9 @@ export default function RoutineBuilderScreen() {
                                       </View>
                                       {!exItem.is_bodyweight_only && (
                                         <View className="flex-1 bg-slate-800 p-2 rounded-xl">
-                                          <Text className="text-slate-400 text-[10px] mb-0.5">Target lbs</Text>
+                                          <Text className="text-slate-400 text-[10px] mb-0.5">
+                                            {exItem.is_unilateral ? 'Target lbs (ea)' : 'Target lbs'}
+                                          </Text>
                                           <TextInput
                                             className="text-white font-bold text-sm"
                                             keyboardType="decimal-pad"
@@ -1557,14 +1796,36 @@ export default function RoutineBuilderScreen() {
           {/* STEP 3: VOLUMETRIC SANDBOX REVIEW */}
           {step === 3 && (
             <ScrollView className="flex-1">
-              <View className="bg-indigo-950/40 p-5 rounded-2xl border border-indigo-500/30 mb-6">
+              <View className="bg-indigo-950/40 p-5 rounded-2xl border border-indigo-500/30 mb-4">
                 <View className="flex-row items-center mb-2">
                   <Sparkles color="#a78bfa" size={20} className="mr-2" />
                   <Text className="text-white font-bold text-lg">Volumetric Impact Dashboard</Text>
                 </View>
-                <Text className="text-indigo-200 text-xs leading-5">
-                  Evaluates weekly planned working sets per muscle group against ACSM umbrella-review landmarks (Optimal Hypertrophy: 10–22 fractional sets/week).
+                <Text className="text-indigo-200 text-xs leading-5 mb-3">
+                  Evaluates weekly planned working sets per sub-muscle against ACSM umbrella-review landmarks (Optimal Hypertrophy: 10–22 fractional sets/week).
                 </Text>
+                <View className="flex-row flex-wrap gap-2">
+                  {days.map((d) => {
+                    const mins = estimateSplitDayMinutes(d.exercises, getDayBlocks(d.exercises), {
+                      defaultRestSeconds,
+                      lockRestTimerToDefault,
+                      supersetTransitionSeconds,
+                    });
+                    const colorCls =
+                      mins <= 20
+                        ? 'bg-emerald-500/20 border-emerald-500/40 text-emerald-300'
+                        : mins <= 30
+                        ? 'bg-amber-500/20 border-amber-500/40 text-amber-300'
+                        : 'bg-indigo-500/20 border-indigo-500/40 text-indigo-200';
+                    return (
+                      <View key={d.day_number} className={`px-2.5 py-1 rounded-lg border ${colorCls.split(' ').slice(0, 2).join(' ')}`}>
+                        <Text className={`text-[11px] font-bold ${colorCls.split(' ')[2]}`}>
+                          {d.name}: ~{mins} min
+                        </Text>
+                      </View>
+                    );
+                  })}
+                </View>
               </View>
 
               {/* Muscle Progress Bars */}
@@ -1740,9 +2001,59 @@ export default function RoutineBuilderScreen() {
                 </View>
               </View>
 
+              {/* Equipment Selector */}
+              <View className="mb-3">
+                <Text className="text-slate-400 text-xs font-semibold uppercase mb-2">Equipment</Text>
+                <View className="flex-row flex-wrap gap-2">
+                  {EQUIPMENT_OPTIONS.map((eq) => {
+                    const selected = newExEquipment === eq;
+                    return (
+                      <TouchableOpacity
+                        key={eq}
+                        onPress={() => {
+                          setNewExEquipment(eq);
+                          setNewExIsBodyweight(eq === 'bodyweight' || eq === 'pullup_dip_bar');
+                        }}
+                        className={`px-3 py-1.5 rounded-xl border ${
+                          selected
+                            ? 'bg-emerald-600/30 border-emerald-500'
+                            : 'bg-slate-900 border-slate-800'
+                        }`}
+                      >
+                        <Text className={`font-semibold text-xs ${selected ? 'text-emerald-200' : 'text-slate-400'}`}>
+                          {EQUIPMENT_LABELS[eq]}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+              </View>
+
+              {/* Unilateral Toggle */}
+              <TouchableOpacity
+                onPress={() => setNewExIsUnilateral(!newExIsUnilateral)}
+                className="flex-row justify-between items-center bg-slate-900 border border-slate-800 p-4 rounded-xl mb-3"
+              >
+                <View className="flex-1 mr-3">
+                  <Text className="text-white font-semibold text-sm">Unilateral (Per-Side)</Text>
+                  <Text className="text-slate-500 text-xs">Logs per-limb weight & doubles tonnage</Text>
+                </View>
+                <View className={`w-6 h-6 rounded-md items-center justify-center ${newExIsUnilateral ? 'bg-cyan-600' : 'bg-slate-800 border border-slate-700'}`}>
+                  {newExIsUnilateral && <Check color="white" size={14} />}
+                </View>
+              </TouchableOpacity>
+
               {/* Bodyweight Toggle */}
               <TouchableOpacity
-                onPress={() => setNewExIsBodyweight(!newExIsBodyweight)}
+                onPress={() => {
+                  const nextVal = !newExIsBodyweight;
+                  setNewExIsBodyweight(nextVal);
+                  if (nextVal && newExEquipment !== 'bodyweight' && newExEquipment !== 'pullup_dip_bar') {
+                    setNewExEquipment('bodyweight');
+                  } else if (!nextVal && (newExEquipment === 'bodyweight' || newExEquipment === 'pullup_dip_bar')) {
+                    setNewExEquipment('dumbbell');
+                  }
+                }}
                 className="flex-row justify-between items-center bg-slate-900 border border-slate-800 p-4 rounded-xl mb-4"
               >
                 <View className="flex-1 mr-3">
@@ -1775,11 +2086,11 @@ export default function RoutineBuilderScreen() {
           ) : (
             <View className="flex-1">
               {/* Search Bar */}
-              <View className="flex-row items-center bg-slate-900 border border-slate-800 rounded-xl px-3.5 py-2.5 mb-4">
+              <View className="flex-row items-center bg-slate-900 border border-slate-800 rounded-xl px-3.5 py-2.5 mb-3">
                 <Search color="#94a3b8" size={18} className="mr-2" />
                 <TextInput
                   className="flex-1 text-white font-medium text-sm"
-                  placeholder="Search exercises by name or muscle..."
+                  placeholder="Search exercises by name, equipment, or muscle..."
                   placeholderTextColor="#64748b"
                   value={searchQuery}
                   onChangeText={setSearchQuery}
@@ -1791,11 +2102,44 @@ export default function RoutineBuilderScreen() {
                 )}
               </View>
 
+              {/* Equipment Filter Chips */}
+              <View className="mb-3">
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8 }}>
+                  {(
+                    [
+                      { key: 'my_gym', label: myGymChipLabel },
+                      { key: 'dumbbell', label: 'Dumbbell' },
+                      { key: 'bodyweight', label: 'Bodyweight' },
+                      { key: 'all', label: 'All' },
+                    ] as const
+                  ).map((chip) => {
+                    const active = pickerEquipmentFilter === chip.key;
+                    return (
+                      <TouchableOpacity
+                        key={chip.key}
+                        onPress={() => setPickerEquipmentFilter(chip.key)}
+                        className={`px-3.5 py-1.5 rounded-full border ${
+                          active
+                            ? 'bg-emerald-600/25 border-emerald-500'
+                            : 'bg-slate-900 border-slate-800'
+                        }`}
+                      >
+                        <Text className={`text-xs font-bold ${active ? 'text-emerald-300' : 'text-slate-300'}`}>
+                          {chip.label}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </ScrollView>
+              </View>
+
               {filteredExercises.length === 0 ? (
                 <View className="flex-1 items-center justify-center py-10 px-4">
                   <Dumbbell color="#64748b" size={32} className="mb-2" />
                   <Text className="text-slate-400 text-center font-medium mb-4">
-                    No exercises found matching "{searchQuery}"
+                    {searchQuery
+                      ? `No exercises found matching "${searchQuery}"`
+                      : 'No exercises match this equipment filter.'}
                   </Text>
                   <TouchableOpacity
                     onPress={() => {
@@ -1810,21 +2154,34 @@ export default function RoutineBuilderScreen() {
                 </View>
               ) : (
                 <ScrollView className="flex-1 space-y-3">
-                  {filteredExercises.map((ex) => (
-                    <TouchableOpacity
-                      key={ex.id}
-                      onPress={() => handleAddExerciseToActiveDay(ex, targetSupersetIdForPicker)}
-                      className="bg-slate-900 p-4 rounded-xl border border-slate-800 flex-row justify-between items-center mb-3"
-                    >
-                      <View>
-                        <Text className="text-white font-bold text-base">{ex.name}</Text>
-                        <Text className="text-slate-400 text-xs mt-1">
-                          {ex.exercise_muscle_groups?.map(m => `${m.muscle_group} (${m.fraction}x)`).join(', ') || 'No muscle mapped'}
-                        </Text>
-                      </View>
-                      <Plus color="#3b82f6" size={20} />
-                    </TouchableOpacity>
-                  ))}
+                  {filteredExercises.map((ex) => {
+                    const eqLabel = EQUIPMENT_LABELS[resolveExerciseEquipment(ex)];
+                    return (
+                      <TouchableOpacity
+                        key={ex.id}
+                        onPress={() => handleAddExerciseToActiveDay(ex, targetSupersetIdForPicker)}
+                        className="bg-slate-900 p-4 rounded-xl border border-slate-800 flex-row justify-between items-center mb-3"
+                      >
+                        <View className="flex-1 mr-3">
+                          <View className="flex-row items-center flex-wrap gap-1.5">
+                            <Text className="text-white font-bold text-base">{ex.name}</Text>
+                            {ex.is_unilateral ? (
+                              <View className="bg-cyan-500/20 px-1.5 py-0.5 rounded border border-cyan-500/40">
+                                <Text className="text-cyan-300 text-[9px] font-extrabold">PER SIDE</Text>
+                              </View>
+                            ) : null}
+                          </View>
+                          <Text className="text-slate-400 text-xs mt-1">
+                            {eqLabel} •{' '}
+                            {ex.exercise_muscle_groups
+                              ?.map((m) => `${normalizeMuscleGroup(m.muscle_group)} (${m.fraction}x)`)
+                              .join(', ') || 'No muscle mapped'}
+                          </Text>
+                        </View>
+                        <Plus color="#3b82f6" size={20} />
+                      </TouchableOpacity>
+                    );
+                  })}
                 </ScrollView>
               )}
             </View>

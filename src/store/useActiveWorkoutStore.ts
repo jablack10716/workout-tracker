@@ -21,6 +21,8 @@ export interface ActiveWorkoutExercise {
   name: string;
   default_rest_timer_seconds: number;
   is_bodyweight_only: boolean;
+  is_unilateral?: boolean;
+  equipment?: string;
   prev_performance?: string;
   next_target_weight: string;
   is_target_weight_manually_edited?: boolean;

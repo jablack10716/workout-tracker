@@ -19,8 +19,10 @@ import {
 } from 'lucide-react-native';
 import {
   calculateEstimated1RM,
+  getSetTonnage,
   isWorkingCompletedSet,
   MUSCLE_GROUPS,
+  normalizeMuscleGroup,
 } from '../../src/utils/analyticsEngine';
 
 function renderSetBadges(st: any, isBodyweightOnly?: boolean) {
@@ -77,7 +79,7 @@ export default function SessionDetailScreen() {
     const { data: currentSession, error } = await supabase
       .from('sessions')
       .select(
-        '*, routines(name), routine_days(day_number, name), session_exercises(*, exercises(id, name, is_bodyweight_only, exercise_muscle_groups(*)), session_sets(*))'
+        '*, routines(name), routine_days(day_number, name), session_exercises(*, exercises(*, exercise_muscle_groups(*)), session_sets(*))'
       )
       .eq('id', id)
       .single();
@@ -91,7 +93,7 @@ export default function SessionDetailScreen() {
         const query = supabase
           .from('sessions')
           .select(
-            '*, session_exercises(*, exercises(id, name, is_bodyweight_only), session_sets(*))'
+            '*, session_exercises(*, exercises(*), session_sets(*))'
           )
           .eq('user_id', currentSession.user_id)
           .eq('routine_id', currentSession.routine_id)
@@ -146,17 +148,18 @@ export default function SessionDetailScreen() {
   (session.session_exercises || []).forEach((se: any) => {
     const muscleMappings: Array<{ muscle_group: string; fraction: number }> =
       se.exercises?.exercise_muscle_groups || [];
+    const isUnilateral = Boolean(se.exercises?.is_unilateral);
 
     (se.session_sets || []).forEach((st: any) => {
       if (isWorkingCompletedSet(st)) {
         completedSetsCount++;
         const w = Number(st.weight) || 0;
         const r = Number(st.reps) || 0;
-        totalVolume += w * r;
+        totalVolume += getSetTonnage(w, r, isUnilateral);
 
         if (muscleMappings.length > 0) {
           muscleMappings.forEach((m) => {
-            const grp = m.muscle_group;
+            const grp = normalizeMuscleGroup(m.muscle_group);
             const frac = Number(m.fraction) || 1.0;
             if (muscleSets[grp] !== undefined) {
               muscleSets[grp] += frac;
@@ -186,9 +189,14 @@ export default function SessionDetailScreen() {
   let prevTotalVolume = 0;
   if (previousCycleSession) {
     (previousCycleSession.session_exercises || []).forEach((se: any) => {
+      const isUnilateral = Boolean(se.exercises?.is_unilateral);
       (se.session_sets || []).forEach((st: any) => {
         if (isWorkingCompletedSet(st)) {
-          prevTotalVolume += (Number(st.weight) || 0) * (Number(st.reps) || 0);
+          prevTotalVolume += getSetTonnage(
+            Number(st.weight) || 0,
+            Number(st.reps) || 0,
+            isUnilateral
+          );
         }
       });
     });
@@ -376,9 +384,18 @@ export default function SessionDetailScreen() {
                   className="bg-slate-900/80 p-4 rounded-2xl border border-slate-800/90 mb-4 shadow-sm"
                 >
                   <View className="flex-row justify-between items-center mb-3">
-                    <Text className="text-white font-bold text-base flex-1 mr-2" numberOfLines={1}>
-                      {se.exercises?.name || 'Exercise'}
-                    </Text>
+                    <View className="flex-row items-center flex-1 mr-2">
+                      <Text className="text-white font-bold text-base flex-shrink" numberOfLines={1}>
+                        {se.exercises?.name || 'Exercise'}
+                      </Text>
+                      {se.exercises?.is_unilateral && (
+                        <View className="ml-2 bg-cyan-500/15 border border-cyan-500/30 px-1.5 py-0.5 rounded">
+                          <Text className="text-cyan-300 text-[9px] font-extrabold uppercase">
+                            PER SIDE
+                          </Text>
+                        </View>
+                      )}
+                    </View>
                     {topE1RM > 0 && !se.exercises?.is_bodyweight_only && (
                       <View className="bg-blue-500/10 px-2.5 py-1 rounded-xl border border-blue-500/30">
                         <Text className="text-blue-300 font-extrabold text-xs">
@@ -406,14 +423,14 @@ export default function SessionDetailScreen() {
                         <Text className="text-white font-black text-sm">
                           {se.exercises?.is_bodyweight_only
                             ? 'Bodyweight'
-                            : `${st.weight} lbs`}{' '}
+                            : `${st.weight} lbs${se.exercises?.is_unilateral ? ' ea' : ''}`}{' '}
                           × {st.reps} reps
                         </Text>
                       </View>
                     ))}
                   </View>
 
-                  {(se.next_target_weight || (se.exercises?.is_bodyweight_only && se.next_target_reps)) && (
+                  {(se.next_target_weight || se.next_target_reps) && (
                     <View className="mt-3 pt-2.5 border-t border-slate-800 flex-row items-center justify-between">
                       <View className="flex-row items-center">
                         <Sparkles color="#a78bfa" size={14} className="mr-1.5" />
@@ -422,9 +439,13 @@ export default function SessionDetailScreen() {
                         </Text>
                       </View>
                       <Text className="text-white font-bold text-xs">
-                        {se.exercises?.is_bodyweight_only && se.next_target_reps
-                          ? `${se.next_target_reps} reps`
-                          : `${se.next_target_weight} lbs`}
+                        {se.exercises?.is_bodyweight_only
+                          ? `${se.next_target_reps ?? '—'} reps`
+                          : se.next_target_weight && se.next_target_reps
+                          ? `${se.next_target_weight} lbs${se.exercises?.is_unilateral ? ' ea' : ''} × ${se.next_target_reps} reps`
+                          : se.next_target_weight
+                          ? `${se.next_target_weight} lbs${se.exercises?.is_unilateral ? ' ea' : ''}`
+                          : `${se.next_target_reps} reps`}
                       </Text>
                     </View>
                   )}
@@ -472,9 +493,16 @@ export default function SessionDetailScreen() {
                           <View className="bg-indigo-500/30 border border-indigo-500/50 px-2 py-0.5 rounded mr-2">
                             <Text className="text-indigo-300 font-mono font-bold text-xs">{tag}</Text>
                           </View>
-                          <Text className="text-white font-bold text-base">
+                          <Text className="text-white font-bold text-base flex-shrink" numberOfLines={1}>
                             {groupEx.exercises?.name || 'Exercise'}
                           </Text>
+                          {groupEx.exercises?.is_unilateral && (
+                            <View className="ml-2 bg-cyan-500/15 border border-cyan-500/30 px-1.5 py-0.5 rounded">
+                              <Text className="text-cyan-300 text-[9px] font-extrabold uppercase">
+                                PER SIDE
+                              </Text>
+                            </View>
+                          )}
                         </View>
 
                         <View className="space-y-1">
@@ -496,15 +524,14 @@ export default function SessionDetailScreen() {
                               <Text className="text-white font-black text-sm">
                                 {groupEx.exercises?.is_bodyweight_only
                                   ? 'Bodyweight'
-                                  : `${st.weight} lbs`}{' '}
+                                  : `${st.weight} lbs${groupEx.exercises?.is_unilateral ? ' ea' : ''}`}{' '}
                                 × {st.reps} reps
                               </Text>
                             </View>
                           ))}
                         </View>
 
-                        {(groupEx.next_target_weight ||
-                          (groupEx.exercises?.is_bodyweight_only && groupEx.next_target_reps)) && (
+                        {(groupEx.next_target_weight || groupEx.next_target_reps) && (
                           <View className="mt-2.5 pt-2 border-t border-slate-800 flex-row items-center justify-between">
                             <View className="flex-row items-center">
                               <Sparkles color="#a78bfa" size={12} className="mr-1" />
@@ -513,9 +540,13 @@ export default function SessionDetailScreen() {
                               </Text>
                             </View>
                             <Text className="text-white font-bold text-xs">
-                              {groupEx.exercises?.is_bodyweight_only && groupEx.next_target_reps
-                                ? `${groupEx.next_target_reps} reps`
-                                : `${groupEx.next_target_weight} lbs`}
+                              {groupEx.exercises?.is_bodyweight_only
+                                ? `${groupEx.next_target_reps ?? '—'} reps`
+                                : groupEx.next_target_weight && groupEx.next_target_reps
+                                ? `${groupEx.next_target_weight} lbs${groupEx.exercises?.is_unilateral ? ' ea' : ''} × ${groupEx.next_target_reps} reps`
+                                : groupEx.next_target_weight
+                                ? `${groupEx.next_target_weight} lbs${groupEx.exercises?.is_unilateral ? ' ea' : ''}`
+                                : `${groupEx.next_target_reps} reps`}
                             </Text>
                           </View>
                         )}

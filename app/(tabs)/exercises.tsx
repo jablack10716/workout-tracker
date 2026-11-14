@@ -1,15 +1,33 @@
-import { View, Text, FlatList, TouchableOpacity, ActivityIndicator, TextInput } from 'react-native';
+import { View, Text, FlatList, TouchableOpacity, ActivityIndicator, TextInput, ScrollView } from 'react-native';
 import { Plus, ChevronRight, Search, X } from 'lucide-react-native';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useExercises, Exercise } from '../../src/hooks/useExercises';
-import { useCallback, useState, useMemo } from 'react';
+import { useCallback, useState, useMemo, useEffect } from 'react';
+import { EQUIPMENT_LABELS, usePreferencesStore } from '../../src/store/usePreferencesStore';
+import {
+  EquipmentFilterMode,
+  matchesEquipmentFilter,
+  normalizeMuscleGroup,
+  resolveExerciseEquipment,
+} from '../../src/utils/analyticsEngine';
 
 export default function ExercisesScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const { exercises, loading, refetch } = useExercises();
+  const filterByMyGym = usePreferencesStore((s) => s.filterByMyGym);
+  const allowedEquipment = usePreferencesStore((s) => s.allowedEquipment);
+  const lockRestTimerToDefault = usePreferencesStore((s) => s.lockRestTimerToDefault);
+  const defaultRestSeconds = usePreferencesStore((s) => s.defaultRestSeconds);
   const [searchQuery, setSearchQuery] = useState('');
+  const [equipmentFilter, setEquipmentFilter] = useState<EquipmentFilterMode>(
+    filterByMyGym ? 'my_gym' : 'all'
+  );
+
+  useEffect(() => {
+    setEquipmentFilter(filterByMyGym ? 'my_gym' : 'all');
+  }, [filterByMyGym]);
 
   useFocusEffect(
     useCallback(() => {
@@ -17,22 +35,48 @@ export default function ExercisesScreen() {
     }, [])
   );
 
+  const myGymChipLabel =
+    allowedEquipment.length === 2 &&
+    allowedEquipment.includes('dumbbell') &&
+    allowedEquipment.includes('bodyweight')
+      ? 'My Gym (DB + BW)'
+      : 'My Gym';
+
   const filteredExercises = useMemo(() => {
-    if (!searchQuery.trim()) return exercises;
     const query = searchQuery.toLowerCase().trim();
     return exercises.filter((ex) => {
-      const matchName = ex.name.toLowerCase().includes(query);
-      const matchMuscles = ex.exercise_muscle_groups?.some(m => 
-        m.muscle_group.toLowerCase().includes(query)
-      );
+      if (!matchesEquipmentFilter(ex, equipmentFilter, allowedEquipment)) {
+        return false;
+      }
+      if (!query) return true;
+      const eqLabel = EQUIPMENT_LABELS[resolveExerciseEquipment(ex)].toLowerCase();
+      const matchName = ex.name.toLowerCase().includes(query) || eqLabel.includes(query);
+      const matchMuscles = ex.exercise_muscle_groups?.some((m) => {
+        const raw = m.muscle_group.toLowerCase();
+        const norm = String(normalizeMuscleGroup(m.muscle_group)).toLowerCase();
+        return raw.includes(query) || norm.includes(query);
+      });
       return matchName || matchMuscles;
     });
-  }, [exercises, searchQuery]);
+  }, [exercises, searchQuery, equipmentFilter, allowedEquipment]);
 
   const renderItem = ({ item }: { item: Exercise }) => {
-    const muscles = item.exercise_muscle_groups || [];
-    const primary = muscles.find(m => Number(m.fraction) === 1.0);
-    const secondaries = muscles.filter(m => Number(m.fraction) === 0.5);
+    const muscles = (item.exercise_muscle_groups || []).map((m) => ({
+      ...m,
+      muscle_group: String(normalizeMuscleGroup(m.muscle_group)),
+    }));
+    const primary = muscles.find((m) => Number(m.fraction) === 1.0);
+    const seen = new Set<string>(primary ? [primary.muscle_group] : []);
+    const secondaries = muscles.filter((m) => {
+      if (Number(m.fraction) !== 0.5 || seen.has(m.muscle_group)) return false;
+      seen.add(m.muscle_group);
+      return true;
+    });
+    const eq = resolveExerciseEquipment(item);
+    const eqLabel = EQUIPMENT_LABELS[eq];
+    const effectiveRest = lockRestTimerToDefault
+      ? `${defaultRestSeconds}s Default Rest`
+      : `${item.default_rest_timer_seconds}s Rest`;
 
     return (
       <TouchableOpacity 
@@ -40,7 +84,14 @@ export default function ExercisesScreen() {
         className="bg-slate-800 p-4 rounded-xl mb-3 flex-row justify-between items-center"
       >
         <View className="flex-1 mr-3">
-          <Text className="text-white font-bold text-lg mb-1">{item.name}</Text>
+          <View className="flex-row items-center flex-wrap gap-2 mb-1">
+            <Text className="text-white font-bold text-lg">{item.name}</Text>
+            {item.is_unilateral ? (
+              <View className="bg-cyan-500/20 px-2 py-0.5 rounded-md border border-cyan-500/40">
+                <Text className="text-cyan-300 text-[10px] font-extrabold tracking-wider">PER SIDE</Text>
+              </View>
+            ) : null}
+          </View>
           
           {/* Muscle Group Badges */}
           <View className="flex-row flex-wrap gap-1 mb-2">
@@ -57,7 +108,7 @@ export default function ExercisesScreen() {
           </View>
 
           <Text className="text-slate-400 text-xs">
-            {item.is_bodyweight_only ? 'Bodyweight' : 'Weighted'} • {item.default_rest_timer_seconds}s Rest
+            {eqLabel} • {effectiveRest}
           </Text>
         </View>
         <ChevronRight color="#94a3b8" size={20} />
@@ -84,11 +135,11 @@ export default function ExercisesScreen() {
       </View>
       
       {/* Search Input Bar */}
-      <View className="bg-slate-800 flex-row items-center px-4 py-3 rounded-xl mb-4 border border-slate-700/60">
+      <View className="bg-slate-800 flex-row items-center px-4 py-3 rounded-xl mb-3 border border-slate-700/60">
         <Search color="#94a3b8" size={20} className="mr-3" />
         <TextInput
           className="flex-1 text-white text-base"
-          placeholder="Search by name or muscle group..."
+          placeholder="Search by name, equipment, or muscle..."
           placeholderTextColor="#64748b"
           value={searchQuery}
           onChangeText={setSearchQuery}
@@ -98,6 +149,37 @@ export default function ExercisesScreen() {
             <X color="#94a3b8" size={18} />
           </TouchableOpacity>
         ) : null}
+      </View>
+
+      {/* Equipment Filter Chips */}
+      <View className="mb-3">
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8 }}>
+          {(
+            [
+              { key: 'my_gym', label: myGymChipLabel },
+              { key: 'dumbbell', label: 'Dumbbell' },
+              { key: 'bodyweight', label: 'Bodyweight' },
+              { key: 'all', label: 'All' },
+            ] as const
+          ).map((chip) => {
+            const active = equipmentFilter === chip.key;
+            return (
+              <TouchableOpacity
+                key={chip.key}
+                onPress={() => setEquipmentFilter(chip.key)}
+                className={`px-3.5 py-1.5 rounded-full border ${
+                  active
+                    ? 'bg-emerald-600/25 border-emerald-500'
+                    : 'bg-slate-800 border-slate-700'
+                }`}
+              >
+                <Text className={`text-xs font-bold ${active ? 'text-emerald-300' : 'text-slate-300'}`}>
+                  {chip.label}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
+        </ScrollView>
       </View>
       
       {loading ? (

@@ -29,10 +29,13 @@ import {
   extractPersonalRecords,
   getExerciseE1RMHistory,
   getSessionVolumeHistory,
+  getSetTonnage,
   getWeeklyVolumeHistory,
   getMuscleGroupVolumeStatusList,
   calculateWorkoutStreak,
+  isWorkingCompletedSet,
   MUSCLE_GROUPS,
+  normalizeMuscleGroup,
   PREntry,
 } from '../../src/utils/analyticsEngine';
 import { LineChart } from '../../src/components/charts/LineChart';
@@ -63,7 +66,7 @@ export default function AnalyticsScreen() {
         supabase
           .from('sessions')
           .select(
-            '*, routines(name), session_exercises(*, exercises(id, name, is_bodyweight_only, exercise_muscle_groups(*)), session_sets(*))'
+            '*, routines(name), session_exercises(*, exercises(*, exercise_muscle_groups(*)), session_sets(*))'
           )
           .eq('user_id', userId)
           .order('started_at', { ascending: true }),
@@ -100,7 +103,7 @@ export default function AnalyticsScreen() {
           (day.routine_exercises || []).forEach((re: any) => {
             const plannedSets = Number(re.planned_sets) || 0;
             (re.exercises?.exercise_muscle_groups || []).forEach((m: any) => {
-              const grp = m.muscle_group;
+              const grp = normalizeMuscleGroup(m.muscle_group);
               const frac = Number(m.fraction) || 1.0;
               if (targets[grp] !== undefined) {
                 targets[grp] += plannedSets * frac;
@@ -143,7 +146,7 @@ export default function AnalyticsScreen() {
   const e1rmChartData = e1rmHistory.map((dp) => ({
     label: dp.date,
     value: Math.round(dp.e1rm),
-    sublabel: `${dp.weight} lbs × ${dp.reps}`,
+    sublabel: `${dp.weight} lbs${selectedExPR?.isUnilateral ? ' ea' : ''} × ${dp.reps}`,
     isPR: selectedExPR && dp.e1rm >= selectedExPR.estimated1RM,
   }));
 
@@ -180,7 +183,8 @@ export default function AnalyticsScreen() {
       return;
     }
 
-    let csvContent = 'Date,Routine,Cycle,Exercise,Set,Weight(lbs),Reps,Completed,Estimated1RM(lbs),SetType,RIR\n';
+    let csvContent =
+      'Date,Routine,Cycle,Exercise,Set,Weight(lbs),Reps,Completed,Estimated1RM(lbs),SetType,RIR,Unilateral,SetTonnage(lbs)\n';
     sessions.forEach((s) => {
       const date = new Date(s.started_at).toISOString().split('T')[0];
       const routineName = s.routines?.name || 'Workout';
@@ -188,13 +192,15 @@ export default function AnalyticsScreen() {
 
       (s.session_exercises || []).forEach((se: any) => {
         const exName = se.exercises?.name || 'Exercise';
+        const isUnilateral = Boolean(se.exercises?.is_unilateral);
         (se.session_sets || []).forEach((st: any) => {
           const w = Number(st.weight) || 0;
           const r = Number(st.reps) || 0;
           const setType = st.set_type || 'normal';
           const rirCell = st.rir !== null && st.rir !== undefined ? String(st.rir) : '';
           const e1rm = setType === 'warmup' ? 0 : calculateEstimated1RM(w, r);
-          csvContent += `"${date}","${routineName}",${cycleNum},"${exName}",${st.set_number},${w},${r},${st.is_completed},${e1rm},"${setType}",${rirCell}\n`;
+          const setTonnage = isWorkingCompletedSet(st) ? getSetTonnage(w, r, isUnilateral) : 0;
+          csvContent += `"${date}","${routineName}",${cycleNum},"${exName}",${st.set_number},${w},${r},${st.is_completed},${e1rm},"${setType}",${rirCell},${isUnilateral},${setTonnage}\n`;
         });
       });
     });
@@ -403,7 +409,7 @@ export default function AnalyticsScreen() {
           <View className="mb-4">
             <RadarChart
               data={muscleRadarData}
-              title="7-Muscle Group Volumetric Matrix"
+              title="11-Muscle Group Volumetric Matrix"
               subtitle="Fractional weekly volume distribution"
               targetLegendLabel={
                 activeRoutineTargets !== null ? 'Active Split Target' : 'ACSM Baseline (12s)'
@@ -498,9 +504,18 @@ export default function AnalyticsScreen() {
                       <Award color="#f59e0b" size={20} />
                     </View>
                     <View className="flex-1 min-w-0">
-                      <Text className="text-white font-bold text-sm" numberOfLines={1}>
-                        {pr.exerciseName}
-                      </Text>
+                      <View className="flex-row items-center">
+                        <Text className="text-white font-bold text-sm flex-shrink" numberOfLines={1}>
+                          {pr.exerciseName}
+                        </Text>
+                        {pr.isUnilateral && (
+                          <View className="ml-2 bg-cyan-500/15 border border-cyan-500/30 px-1.5 py-0.5 rounded">
+                            <Text className="text-cyan-300 text-[9px] font-extrabold uppercase">
+                              PER SIDE
+                            </Text>
+                          </View>
+                        )}
+                      </View>
                       <Text className="text-slate-400 text-[11px]">
                         {pr.dateAchieved
                           ? new Date(pr.dateAchieved).toLocaleDateString('en-US', {
@@ -518,7 +533,7 @@ export default function AnalyticsScreen() {
                       <Text className="text-amber-300 font-black text-xs">
                         {pr.isBodyweight
                           ? `BW × ${pr.maxRepsAtMaxWeight} reps`
-                          : `${pr.maxWeight} lbs × ${pr.maxRepsAtMaxWeight}`}
+                          : `${pr.maxWeight} lbs${pr.isUnilateral ? ' ea' : ''} × ${pr.maxRepsAtMaxWeight}`}
                       </Text>
                     </View>
                     {!pr.isBodyweight && pr.estimated1RM > 0 && (

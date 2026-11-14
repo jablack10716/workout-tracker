@@ -3,10 +3,10 @@ import { View, Text, TextInput, TouchableOpacity, ScrollView, Alert, ActivityInd
 import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { supabase } from '../src/lib/supabase';
-import { usePreferencesStore, RestDurationOption, SupersetTransitionSeconds } from '../src/store/usePreferencesStore';
-import { X, User, Bell, LogOut, Check, Database } from 'lucide-react-native';
+import { usePreferencesStore, RestDurationOption, SupersetTransitionSeconds, EQUIPMENT_OPTIONS, EQUIPMENT_LABELS } from '../src/store/usePreferencesStore';
+import { X, User, Bell, LogOut, Check, Database, Dumbbell } from 'lucide-react-native';
 
-const REST_OPTIONS: readonly RestDurationOption[] = [60, 90, 120, 180];
+const REST_OPTIONS: readonly RestDurationOption[] = [45, 60, 90, 120, 180];
 const TRANSITION_OPTIONS: readonly SupersetTransitionSeconds[] = [0, 15, 30, 45];
 
 export default function SettingsScreen() {
@@ -16,12 +16,33 @@ export default function SettingsScreen() {
   const [displayName, setDisplayName] = useState('');
   const defaultTimer = usePreferencesStore((s) => s.defaultRestSeconds);
   const setDefaultTimer = usePreferencesStore((s) => s.setDefaultRestSeconds);
+  const lockRestTimerToDefault = usePreferencesStore((s) => s.lockRestTimerToDefault);
+  const setLockRestTimerToDefault = usePreferencesStore((s) => s.setLockRestTimerToDefault);
   const supersetTransitionSeconds = usePreferencesStore((s) => s.supersetTransitionSeconds);
   const setSupersetTransitionSeconds = usePreferencesStore((s) => s.setSupersetTransitionSeconds);
   const hapticsEnabled = usePreferencesStore((s) => s.hapticsEnabled);
   const setHapticsEnabled = usePreferencesStore((s) => s.setHapticsEnabled);
+  const filterByMyGym = usePreferencesStore((s) => s.filterByMyGym);
+  const setFilterByMyGym = usePreferencesStore((s) => s.setFilterByMyGym);
+  const allowedEquipment = usePreferencesStore((s) => s.allowedEquipment);
+  const toggleAllowedEquipment = usePreferencesStore((s) => s.toggleAllowedEquipment);
+  const maxDumbbellWeightLbs = usePreferencesStore((s) => s.maxDumbbellWeightLbs);
+  const setMaxDumbbellWeightLbs = usePreferencesStore((s) => s.setMaxDumbbellWeightLbs);
+  const [capInput, setCapInput] = useState(
+    maxDumbbellWeightLbs !== null && maxDumbbellWeightLbs !== undefined
+      ? String(maxDumbbellWeightLbs)
+      : ''
+  );
   const [loading, setLoading] = useState(false);
   const [saved, setSaved] = useState(false);
+
+  useEffect(() => {
+    setCapInput(
+      maxDumbbellWeightLbs !== null && maxDumbbellWeightLbs !== undefined
+        ? String(maxDumbbellWeightLbs)
+        : ''
+    );
+  }, [maxDumbbellWeightLbs]);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
@@ -121,12 +142,12 @@ export default function SettingsScreen() {
           </View>
 
           <Text className="text-slate-400 text-sm mb-3">Default Rest Duration for New Exercises:</Text>
-          <View className="flex-row justify-between mb-5">
+          <View className="flex-row flex-wrap gap-2 mb-5">
             {REST_OPTIONS.map((seconds) => (
               <TouchableOpacity
                 key={seconds}
                 onPress={() => setDefaultTimer(seconds)}
-                className={`px-4 py-2 rounded-xl border ${
+                className={`px-3.5 py-2 rounded-xl border ${
                   defaultTimer === seconds 
                     ? 'bg-purple-600/30 border-purple-500' 
                     : 'bg-slate-800/40 border-slate-700/50'
@@ -137,6 +158,23 @@ export default function SettingsScreen() {
                 </Text>
               </TouchableOpacity>
             ))}
+          </View>
+
+          <View className="flex-row justify-between items-center pb-4 mb-4 border-b border-slate-800/80">
+            <View className="flex-1 mr-3">
+              <Text className="text-slate-200 font-semibold text-sm">
+                Override Exercise Rest With Default
+              </Text>
+              <Text className="text-slate-500 text-xs mt-0.5">
+                Use {defaultTimer}s across active workouts & express timing instead of seeded per-lift rest timers.
+              </Text>
+            </View>
+            <TouchableOpacity
+              onPress={() => setLockRestTimerToDefault(!lockRestTimerToDefault)}
+              className={`w-12 h-7 rounded-full p-1 ${lockRestTimerToDefault ? 'bg-purple-600' : 'bg-slate-700'}`}
+            >
+              <View className={`w-5 h-5 rounded-full bg-white ${lockRestTimerToDefault ? 'ml-auto' : 'mr-auto'}`} />
+            </TouchableOpacity>
           </View>
 
           <Text className="text-slate-400 text-sm mb-1">Superset Transition Breather:</Text>
@@ -168,6 +206,104 @@ export default function SettingsScreen() {
               className={`w-12 h-7 rounded-full p-1 ${hapticsEnabled ? 'bg-purple-600' : 'bg-slate-700'}`}
             >
               <View className={`w-5 h-5 rounded-full bg-white ${hapticsEnabled ? 'ml-auto' : 'mr-auto'}`} />
+            </TouchableOpacity>
+          </View>
+        </View>
+
+        {/* My Gym & Equipment Cap */}
+        <View className="bg-slate-900/60 p-5 rounded-2xl border border-slate-800 mb-6">
+          <View className="flex-row items-center mb-4">
+            <Dumbbell color="#10b981" size={20} className="mr-2" />
+            <Text className="text-white text-lg font-bold">My Gym & Equipment Cap</Text>
+          </View>
+
+          <View className="flex-row justify-between items-center pb-4 mb-4 border-b border-slate-800/80">
+            <View className="flex-1 mr-3">
+              <Text className="text-slate-200 font-semibold text-sm">Filter Pickers by My Gym</Text>
+              <Text className="text-slate-500 text-xs mt-0.5">
+                Default Exercise Library, Routine Builder, and Swap modals to your checked equipment.
+              </Text>
+            </View>
+            <TouchableOpacity
+              onPress={() => setFilterByMyGym(!filterByMyGym)}
+              className={`w-12 h-7 rounded-full p-1 ${filterByMyGym ? 'bg-emerald-600' : 'bg-slate-700'}`}
+            >
+              <View className={`w-5 h-5 rounded-full bg-white ${filterByMyGym ? 'ml-auto' : 'mr-auto'}`} />
+            </TouchableOpacity>
+          </View>
+
+          <Text className="text-slate-400 text-sm mb-2">Available Equipment:</Text>
+          <View className="flex-row flex-wrap gap-2 mb-5">
+            {EQUIPMENT_OPTIONS.map((eq) => {
+              const selected = allowedEquipment.includes(eq);
+              return (
+                <TouchableOpacity
+                  key={eq}
+                  onPress={() => toggleAllowedEquipment(eq)}
+                  className={`px-3 py-1.5 rounded-xl border ${
+                    selected
+                      ? 'bg-emerald-600/25 border-emerald-500'
+                      : 'bg-slate-800/40 border-slate-700/50'
+                  }`}
+                >
+                  <Text className={`text-xs font-semibold ${selected ? 'text-emerald-300' : 'text-slate-400'}`}>
+                    {EQUIPMENT_LABELS[eq]}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+
+          <Text className="text-slate-400 text-sm mb-1">Max Adjustable Dumbbell Weight (lbs)</Text>
+          <Text className="text-slate-500 text-xs mb-2">
+            Caps auto-promoted dumbbell weight targets and shifts double-progression to +1 rep at ceiling. Leave empty for no cap.
+          </Text>
+          <View className="flex-row items-center gap-2">
+            <TextInput
+              className="flex-1 bg-slate-800 text-white p-3 rounded-xl border border-slate-700 font-bold"
+              keyboardType="numeric"
+              value={capInput}
+              onChangeText={(txt) => {
+                setCapInput(txt);
+                const trimmed = txt.trim();
+                if (!trimmed) {
+                  setMaxDumbbellWeightLbs(null);
+                } else {
+                  const parsed = parseFloat(trimmed);
+                  if (Number.isFinite(parsed) && parsed > 0) {
+                    setMaxDumbbellWeightLbs(parsed);
+                  }
+                }
+              }}
+              placeholder="No Cap (e.g. 50)"
+              placeholderTextColor="#64748b"
+            />
+            {[50, 75].map((preset) => (
+              <TouchableOpacity
+                key={preset}
+                onPress={() => setMaxDumbbellWeightLbs(preset)}
+                className={`px-3 py-3 rounded-xl border ${
+                  maxDumbbellWeightLbs === preset
+                    ? 'bg-emerald-600/25 border-emerald-500'
+                    : 'bg-slate-800 border-slate-700'
+                }`}
+              >
+                <Text className={`text-xs font-bold ${maxDumbbellWeightLbs === preset ? 'text-emerald-300' : 'text-slate-300'}`}>
+                  {preset} lb
+                </Text>
+              </TouchableOpacity>
+            ))}
+            <TouchableOpacity
+              onPress={() => setMaxDumbbellWeightLbs(null)}
+              className={`px-3 py-3 rounded-xl border ${
+                maxDumbbellWeightLbs === null
+                  ? 'bg-indigo-600/25 border-indigo-500'
+                  : 'bg-slate-800 border-slate-700'
+              }`}
+            >
+              <Text className={`text-xs font-bold ${maxDumbbellWeightLbs === null ? 'text-indigo-300' : 'text-slate-300'}`}>
+                Off
+              </Text>
             </TouchableOpacity>
           </View>
         </View>

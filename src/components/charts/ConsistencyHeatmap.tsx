@@ -1,6 +1,6 @@
 import React from 'react';
 import { View, Text, ScrollView } from 'react-native';
-import { isWorkingCompletedSet } from '../../utils/analyticsEngine';
+import { getSetTonnage, isWorkingCompletedSet } from '../../utils/analyticsEngine';
 
 interface HeatmapDay {
   dateStr: string; // YYYY-MM-DD
@@ -38,9 +38,10 @@ export const ConsistencyHeatmap: React.FC<ConsistencyHeatmapProps> = ({
 
     let sessionVol = 0;
     (s.session_exercises || []).forEach((se: any) => {
+      const isUnilateral = Boolean(se.exercises?.is_unilateral);
       (se.session_sets || []).forEach((st: any) => {
         if (isWorkingCompletedSet(st)) {
-          sessionVol += (Number(st.weight) || 0) * (Number(st.reps) || 0);
+          sessionVol += getSetTonnage(Number(st.weight) || 0, Number(st.reps) || 0, isUnilateral);
         }
       });
     });

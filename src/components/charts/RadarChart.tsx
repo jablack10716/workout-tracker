@@ -19,6 +19,17 @@ interface RadarChartProps {
   targetLegendLabel?: string;
 }
 
+const RADAR_SHORT_LABELS: Record<string, string> = {
+  'Upper Back': 'U.Back',
+  Shoulders: 'Shldrs',
+  Hamstrings: 'Hams',
+};
+
+function formatAxisLabel(label: string, totalAxes: number): string {
+  if (totalAxes <= 8) return label;
+  return RADAR_SHORT_LABELS[label] || label;
+}
+
 export const RadarChart: React.FC<RadarChartProps> = ({
   data,
   title = 'Muscle Group Volume Balance',
@@ -32,12 +43,13 @@ export const RadarChart: React.FC<RadarChartProps> = ({
     return null;
   }
 
-  const screenWidth = Dimensions.get('window').width;
-  const chartSize = Math.min(size, screenWidth - 64);
-  const center = chartSize / 2;
-  const radius = chartSize * 0.35; // Leave margin for labels
-
   const numAxes = data.length;
+  const screenWidth = Dimensions.get('window').width;
+  const preferredSize = numAxes > 8 ? Math.max(size, 290) : size;
+  const chartSize = Math.min(preferredSize, screenWidth - 40);
+  const center = chartSize / 2;
+  const radius = chartSize * (numAxes > 8 ? 0.29 : 0.35); // Leave margin for labels
+
   const angleStep = (2 * Math.PI) / numAxes;
 
   // Determine max scale (default at least 20 sets for hypertrophy ceiling)
@@ -156,21 +168,32 @@ export const RadarChart: React.FC<RadarChartProps> = ({
         {/* Muscle Group Labels */}
         {data.map((d, i) => {
           const angle = i * angleStep - Math.PI / 2;
-          const labelRadius = radius + 22;
-          const lx = center + labelRadius * Math.cos(angle);
-          const ly = center + labelRadius * Math.sin(angle);
+          const cos = Math.cos(angle);
+          const sin = Math.sin(angle);
+          const labelRadius = radius + (numAxes > 8 ? 12 : 22);
+          const lx = center + labelRadius * cos;
+          const ly = center + labelRadius * sin;
+          const textAnchor =
+            numAxes > 8
+              ? cos > 0.2
+                ? 'start'
+                : cos < -0.2
+                ? 'end'
+                : 'middle'
+              : 'middle';
+          const dy = numAxes > 8 ? (sin > 0.65 ? 8 : sin < -0.65 ? -1 : 3) : 4;
 
           return (
             <SvgText
               key={`label-${i}`}
               x={lx}
-              y={ly + 4}
+              y={ly + dy}
               fill="#cbd5e1"
-              fontSize="10"
+              fontSize={numAxes > 8 ? '9' : '10'}
               fontWeight="bold"
-              textAnchor="middle"
+              textAnchor={textAnchor}
             >
-              {d.label}
+              {formatAxisLabel(d.label, numAxes)}
             </SvgText>
           );
         })}
